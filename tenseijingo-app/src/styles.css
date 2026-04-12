@@ -185,7 +185,7 @@ body {
 /* ===== Modal Dialog ===== */
 #modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.3);
-  z-index: 2000; display: flex; align-items: center; justify-content: center;
+  z-index: 3000; display: flex; align-items: center; justify-content: center;
 }
 #modal-box {
   background: #fff; border-radius: 10px; padding: 24px 28px;
