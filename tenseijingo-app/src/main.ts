@@ -280,10 +280,9 @@ function getFormattedPreviewText(): string {
   return lines.join('\n');
 }
 
-function togglePreview(title: string, body: string) {
+function togglePreview(title: string) {
   if (previewVisible) { hidePreview(); return; }
   previewTitleEl.textContent = title;
-  const chkSpace = document.getElementById('chk-preview-space') as HTMLInputElement;
   previewTextEl.value = getFormattedPreviewText();
   previewPanel.style.display = 'flex';
   previewVisible = true;
@@ -373,7 +372,7 @@ async function createNewFile() {
 async function openFileWithPreview(id: string) {
   await openFile(id);
   const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
-  togglePreview(title, textarea.value);
+  togglePreview(title);
 }
 
 async function openFile(id: string) {
@@ -915,7 +914,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-export')!.addEventListener('click', exportCurrentFile);
   document.getElementById('btn-preview')!.addEventListener('click', () => {
     const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
-    togglePreview(title, textarea.value);
+    togglePreview(title);
   });
   document.getElementById('btn-history')!.addEventListener('click', openHistory);
   document.getElementById('chk-grid')!.addEventListener('change', (e) => {
@@ -1201,7 +1200,7 @@ window.addEventListener('DOMContentLoaded', () => {
       case 'preview':
         if (inEditor) {
           const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
-          togglePreview(title, textarea.value);
+          togglePreview(title);
         }
         break;
       case 'history': if (inEditor) openHistory(); break;
