@@ -37,7 +37,7 @@ interface AppSettings {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  previewSpaceWidth: 'half',
+  previewSpaceWidth: 'full',
   kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
   kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
   kinsokuColorHex: '#d24646'
