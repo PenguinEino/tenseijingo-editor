@@ -115,6 +115,7 @@ let currentTitle = '';
 let currentCustomTitle = false;
 let isDirty = false;
 let boldRanges: BoldRange[] = [];
+let isBoldMode = false;
 let prevRawText = '';
 
 // ===== DOM refs =====
@@ -138,6 +139,7 @@ let compSuffixLen = 0;
 let compCellCol = -1;
 let compCellRow = -1;
 let autoSaveTimer: number | null = null;
+let preCompositionText = '';
 let mouseIsDown = false;
 let mouseAnchorCell: GridCell | null = null;
 let gridCursor: GridCell = { col: 0, row: 5 };
@@ -253,7 +255,13 @@ function removeBoldRange(start: number, end: number) {
 function toggleBoldSelection() {
   const start = Math.min(anchorPos, activePos);
   const end = Math.max(anchorPos, activePos);
-  if (start >= end) return;
+  if (start >= end) {
+    // No selection: toggle bold typing mode
+    isBoldMode = !isBoldMode;
+    updateBoldButtonState();
+    scheduleRender();
+    return;
+  }
   if (isRangeFullyBold(start, end)) removeBoldRange(start, end);
   else addBoldRange(start, end);
   markDirty();
@@ -266,9 +274,14 @@ function updateBoldButtonState() {
   const start = Math.min(anchorPos, activePos);
   const end = Math.max(anchorPos, activePos);
   let active: boolean;
-  if (start === end) active = isPosBold(start);
-  else active = isRangeFullyBold(start, end);
+  if (start === end) {
+    // No selection: show bold mode state, or if cursor is on bold text
+    active = isBoldMode || isPosBold(start);
+  } else {
+    active = isRangeFullyBold(start, end);
+  }
   boldBtnEl.classList.toggle('active', active);
+  boldBtnEl.classList.toggle('bold-mode-on', isBoldMode);
 }
 
 function boldRangesForSave(): number[][] {
@@ -1088,6 +1101,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // IME composition
   textarea.addEventListener('compositionstart', () => {
     isComposing = true;
+    preCompositionText = textarea.value;
     compStart = textarea.selectionStart;
     compSuffixLen = textarea.value.length - textarea.selectionEnd;
     compCellCol = gridCursor.col;
@@ -1103,8 +1117,24 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
   textarea.addEventListener('input', () => {
-    diffAdjustBoldRanges(prevRawText, textarea.value);
-    prevRawText = textarea.value;
+    const oldText = prevRawText;
+    const newText = textarea.value;
+    diffAdjustBoldRanges(oldText, newText);
+    // If bold mode is on, mark newly inserted characters as bold
+    if (isBoldMode && !isComposing && newText.length > oldText.length) {
+      const oLen = oldText.length, nLen = newText.length;
+      let pre = 0;
+      const minLen = Math.min(oLen, nLen);
+      while (pre < minLen && oldText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
+      let oEnd = oLen, nEnd = nLen;
+      while (oEnd > pre && nEnd > pre && oldText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
+        oEnd--; nEnd--;
+      }
+      if (nEnd > pre) {
+        addBoldRange(pre, nEnd);
+      }
+    }
+    prevRawText = newText;
     invalidateCache();
     if (!isComposing) {
       anchorPos = activePos = textarea.selectionStart;
@@ -1117,9 +1147,27 @@ window.addEventListener('DOMContentLoaded', async () => {
     render();
   });
   textarea.addEventListener('compositionend', () => {
+    const oldText = prevRawText;
+    const newText = textarea.value;
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
-    diffAdjustBoldRanges(prevRawText, textarea.value);
-    prevRawText = textarea.value;
+    diffAdjustBoldRanges(oldText, newText);
+    // If bold mode is on, mark the composed (IME) text as bold
+    // Use preCompositionText (captured at compositionstart) as the baseline,
+    // since prevRawText gets updated during composition by input events
+    if (isBoldMode && newText.length > preCompositionText.length) {
+      const oLen = preCompositionText.length, nLen = newText.length;
+      let pre = 0;
+      const minLen = Math.min(oLen, nLen);
+      while (pre < minLen && preCompositionText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
+      let oEnd = oLen, nEnd = nLen;
+      while (oEnd > pre && nEnd > pre && preCompositionText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
+        oEnd--; nEnd--;
+      }
+      if (nEnd > pre) {
+        addBoldRange(pre, nEnd);
+      }
+    }
+    prevRawText = newText;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     syncFromRaw();

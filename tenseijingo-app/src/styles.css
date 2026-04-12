@@ -224,10 +224,20 @@ body {
 #toolbar button.tb-format {
   font-family: "游明朝","Yu Mincho","MS 明朝",serif;
   font-size: 13px; min-width: 26px; padding: 4px 8px;
+  position: relative;
+  transition: all 0.2s;
 }
 #toolbar button.tb-format.active {
   background: #e8edf5; border-color: #4a7fd4; color: #2c3e50;
 }
+#toolbar button.tb-format.bold-mode-on {
+  background: #4a7fd4; border-color: #3b6fc4; color: #fff;
+  box-shadow: 0 0 8px rgba(74, 127, 212, 0.4);
+}
+#toolbar button.tb-format.bold-mode-on:hover {
+  background: #3b6fc4; border-color: #2c5fb4;
+}
+
 .cell.composing::after {
   content: ''; position: absolute;
   left: 15%; right: 15%; bottom: 10%; height: 2px; background: #333;
