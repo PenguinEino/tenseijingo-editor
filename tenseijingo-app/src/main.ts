@@ -57,7 +57,7 @@ function applySettings(settings: AppSettings) {
   const r = parseInt(hex.substring(0, 2), 16) || 210;
   const g = parseInt(hex.substring(2, 4), 16) || 70;
   const b = parseInt(hex.substring(4, 6), 16) || 70;
-  document.documentElement.style.setProperty('--kinsoku-bg', `rgba(${r}, ${g}, ${b}, 0.13)`);
+  document.documentElement.style.setProperty('--kinsoku-bg', `rgba(${r}, ${g}, ${b}, 0.35)`);
 }
 
 function loadSettings() {

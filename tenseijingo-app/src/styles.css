@@ -1,4 +1,4 @@
-:root { --cell: 34px; --fs: 19px; --tcy: 12px; --kinsoku-bg: rgba(210, 70, 70, 0.13); }
+:root { --cell: 34px; --fs: 19px; --tcy: 12px; --kinsoku-bg: rgba(210, 70, 70, 0.35); }
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
