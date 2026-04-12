@@ -43,52 +43,9 @@ fn file_path(app: &tauri::AppHandle, id: &str) -> PathBuf {
 }
 
 fn now_iso() -> String {
-    let now = std::time::SystemTime::now();
-    let dur = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs();
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let h = time_of_day / 3600;
-    let m = (time_of_day % 3600) / 60;
-    let s = time_of_day % 60;
-    let mut y: i64 = 1970;
-    let mut remaining = days as i64;
-    loop {
-        let days_in_year: i64 = if is_leap(y) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        y += 1;
-    }
-    let month_days: [i64; 12] = if is_leap(y) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-    let mut mo = 0;
-    for md in &month_days {
-        if remaining < *md {
-            break;
-        }
-        remaining -= md;
-        mo += 1;
-    }
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        y,
-        mo + 1,
-        remaining + 1,
-        h,
-        m,
-        s
-    )
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string()
 }
 
 fn derive_title(body: &str) -> String {

@@ -4049,10 +4049,9 @@ dependencies = [
 
 [[package]]
 name = "tenseijingo-app"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "chrono",
- "dirs",
  "git2",
  "serde",
  "serde_json",
