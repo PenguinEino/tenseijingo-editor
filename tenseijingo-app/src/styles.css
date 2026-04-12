@@ -234,6 +234,7 @@ body {
   position: fixed; left: 0; top: 0; width: 2px; height: 2px;
   opacity: 0; z-index: -1; border: none; resize: none; outline: none;
   overflow: hidden; padding: 0; font-size: 16px;
+  white-space: nowrap;
 }
 
 /* ===== Modal Dialog ===== */

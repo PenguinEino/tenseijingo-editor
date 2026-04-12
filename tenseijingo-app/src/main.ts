@@ -835,14 +835,9 @@ function render() {
   if (displayCount > BASE_MAX) s += '　<span class="overflow-warn">超過 +' + (displayCount - BASE_MAX) + '</span>';
   statusText.innerHTML = s;
 
-  if (isComposing && compCellCol >= 0 && cells[compCellCol]?.[compCellRow]) {
-    // IME変換中: 変換開始セルの右側に固定して候補ウィンドウが文字に重ならないようにする
-    const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
-    textarea.style.left = (rect.right + 2) + 'px';
-    textarea.style.top = rect.top + 'px';
-    textarea.style.width = '1px';
-    textarea.style.height = rect.height + 'px';
-  } else if (cells[gridCursor.col]?.[gridCursor.row]) {
+  // IME変換中はtextarea位置を更新しない（compositionstartで固定済み）
+  // 変換中に位置を動かすとIMEがリセットされ候補が消える
+  if (!isComposing && cells[gridCursor.col]?.[gridCursor.row]) {
     const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
     textarea.style.left = rect.left + 'px';
     textarea.style.top = rect.top + 'px';
@@ -935,9 +930,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     isComposing = true;
     compStart = textarea.selectionStart;
     compSuffixLen = textarea.value.length - textarea.selectionEnd;
-    // IME候補ウィンドウ固定用: 変換開始時のセル位置を記録
     compCellCol = gridCursor.col;
     compCellRow = gridCursor.row;
+    // IME候補ウィンドウ用: 変換開始セルの右側にtextareaを一度だけ配置
+    // 幅を広くしてテキスト折り返しを防ぎ、キャレットのずれを抑制
+    if (cells[compCellCol]?.[compCellRow]) {
+      const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
+      textarea.style.left = (rect.right + 2) + 'px';
+      textarea.style.top = rect.top + 'px';
+      textarea.style.width = '200px';
+      textarea.style.height = (rect.height * 2) + 'px';
+    }
   });
   textarea.addEventListener('input', () => {
     invalidateCache();
