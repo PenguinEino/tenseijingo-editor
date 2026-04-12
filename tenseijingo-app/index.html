@@ -41,6 +41,7 @@
       <button id="btn-rename">名前変更</button>
       <button id="btn-export">書出</button>
       <button id="btn-preview">表示</button>
+      <button id="btn-history">履歴</button>
       <span class="tb-divider"></span>
       <label class="tb-check"><input type="checkbox" id="chk-grid" checked> 罫線</label>
     </div>
@@ -77,6 +78,31 @@
     <div id="modal-buttons">
       <button id="modal-cancel">キャンセル</button>
       <button id="modal-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- 履歴モーダル -->
+<div id="history-overlay" style="display:none;">
+  <div id="history-box">
+    <div id="history-header">
+      <span id="history-title">版履歴</span>
+      <button id="history-close">✕</button>
+    </div>
+    <div id="history-body">
+      <div id="history-list-wrapper">
+        <div id="history-list"></div>
+      </div>
+      <div id="history-preview-wrapper" style="display:none;">
+        <div id="history-preview-header">
+          <span id="history-preview-info"></span>
+          <div id="history-preview-actions">
+            <button id="history-restore">この版を復元</button>
+            <button id="history-preview-back">戻る</button>
+          </div>
+        </div>
+        <textarea id="history-preview-text" readonly></textarea>
+      </div>
     </div>
   </div>
 </div>

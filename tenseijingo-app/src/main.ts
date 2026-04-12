@@ -21,6 +21,12 @@ interface FlowResult {
   neededCols: number;
   newlineMarkers: GridCell[];
 }
+interface GitLogEntry {
+  commit_hash: string;
+  message: string;
+  timestamp: string;
+  char_count: number;
+}
 
 // ===== Constants =====
 const BASE_COLS = 35;
@@ -367,14 +373,33 @@ function scheduleAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = window.setTimeout(async () => {
     if (currentFileId && isDirty) {
+      showSaveStatus('saving');
       const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
       updateTitleDisplay();
       updateSaveStatus();
+      showSaveStatus('saved');
     }
-  }, 3000);
+  }, 1000);
+}
+
+function showSaveStatus(state: 'saving' | 'saved' | 'idle') {
+  if (!saveStatusEl) return;
+  saveStatusEl.classList.remove('saving', 'saved');
+  if (state === 'saving') {
+    saveStatusEl.textContent = '保存中…';
+    saveStatusEl.classList.add('saving');
+  } else if (state === 'saved') {
+    saveStatusEl.textContent = '保存済';
+    saveStatusEl.classList.add('saved');
+    setTimeout(() => {
+      if (!isDirty) {
+        saveStatusEl.classList.remove('saved');
+      }
+    }, 2000);
+  }
 }
 
 function markDirty() {
@@ -787,6 +812,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
     togglePreview(title, textarea.value);
   });
+  document.getElementById('btn-history')!.addEventListener('click', openHistory);
   document.getElementById('chk-grid')!.addEventListener('change', (e) => {
     gridEl.classList.toggle('no-gridlines', !(e.target as HTMLInputElement).checked);
   });
@@ -888,6 +914,127 @@ window.addEventListener('DOMContentLoaded', () => {
   // Periodic preview flush (debounced, not per-keystroke)
   setInterval(() => { if (previewDirty) flushPreview(); }, 300);
 
+  // Focus/blur auto-save
+  window.addEventListener('blur', async () => {
+    if (currentFileId && isDirty) {
+      showSaveStatus('saving');
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+      currentTitle = entry.title;
+      currentCustomTitle = entry.custom_title;
+      isDirty = false;
+      updateTitleDisplay();
+      updateSaveStatus();
+      showSaveStatus('saved');
+    }
+  });
+
+  // Periodic dirty check (every 30s)
+  setInterval(async () => {
+    if (currentFileId && isDirty) {
+      showSaveStatus('saving');
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+      currentTitle = entry.title;
+      currentCustomTitle = entry.custom_title;
+      isDirty = false;
+      updateTitleDisplay();
+      updateSaveStatus();
+      showSaveStatus('saved');
+    }
+  }, 30000);
+
+  // ===== History Modal =====
+  const historyOverlay = document.getElementById('history-overlay')!;
+  const historyListEl = document.getElementById('history-list')!;
+  const historyListWrapper = document.getElementById('history-list-wrapper')!;
+  const historyPreviewWrapper = document.getElementById('history-preview-wrapper')!;
+  const historyPreviewInfo = document.getElementById('history-preview-info')!;
+  const historyPreviewText = document.getElementById('history-preview-text') as HTMLTextAreaElement;
+  let historySelectedHash = '';
+
+  document.getElementById('history-close')!.addEventListener('click', closeHistory);
+  document.getElementById('history-preview-back')!.addEventListener('click', () => {
+    historyListWrapper.style.display = 'block';
+    historyPreviewWrapper.style.display = 'none';
+  });
+  document.getElementById('history-restore')!.addEventListener('click', async () => {
+    if (!currentFileId || !historySelectedHash) return;
+    if (!(await customConfirm('この版に復元しますか？'))) return;
+    const entry: FileEntry = await invoke('git_restore', { id: currentFileId, commitHash: historySelectedHash });
+    textarea.value = entry.body;
+    currentTitle = entry.title;
+    currentCustomTitle = entry.custom_title;
+    isDirty = false;
+    invalidateCache();
+    resetCursor();
+    updateTitleDisplay();
+    updateSaveStatus();
+    render();
+    closeHistory();
+    showNotification('復元しました');
+  });
+  historyOverlay.addEventListener('click', (e) => {
+    if (e.target === historyOverlay) closeHistory();
+  });
+
+  function closeHistory() {
+    historyOverlay.style.display = 'none';
+    historyListWrapper.style.display = 'block';
+    historyPreviewWrapper.style.display = 'none';
+    textarea.focus();
+  }
+
+  async function openHistory() {
+    if (!currentFileId) return;
+    // Save before showing history
+    if (isDirty) {
+      await invoke('save_file', { id: currentFileId, body: textarea.value });
+      isDirty = false;
+      updateSaveStatus();
+    }
+    historyOverlay.style.display = 'flex';
+    historyListWrapper.style.display = 'block';
+    historyPreviewWrapper.style.display = 'none';
+    historyListEl.innerHTML = '<div class="history-empty">読み込み中…</div>';
+    try {
+      const logs: GitLogEntry[] = await invoke('git_log', { id: currentFileId });
+      historyListEl.innerHTML = '';
+      if (logs.length === 0) {
+        historyListEl.innerHTML = '<div class="history-empty">履歴がありません。</div>';
+        return;
+      }
+      logs.forEach((log, idx) => {
+        const item = document.createElement('div');
+        item.className = 'history-item' + (idx === 0 ? ' current' : '');
+        item.innerHTML = `
+          <div class="history-item-info">
+            <div class="history-item-time">${escHtml(log.timestamp)}</div>
+            <div class="history-item-msg">${escHtml(log.message)}</div>
+          </div>
+          <div class="history-item-chars">${log.char_count} 文字</div>
+        `;
+        item.addEventListener('click', () => showHistoryPreview(log));
+        historyListEl.appendChild(item);
+      });
+    } catch (err) {
+      historyListEl.innerHTML = '<div class="history-empty">履歴の読み込みに失敗しました。</div>';
+    }
+  }
+
+  async function showHistoryPreview(log: GitLogEntry) {
+    if (!currentFileId) return;
+    historySelectedHash = log.commit_hash;
+    historyPreviewInfo.textContent = `${log.timestamp}　${log.char_count} 文字`;
+    historyPreviewText.value = '読み込み中…';
+    historyListWrapper.style.display = 'none';
+    historyPreviewWrapper.style.display = 'flex';
+    try {
+      const body: string = await invoke('git_show', { id: currentFileId, commitHash: log.commit_hash });
+      historyPreviewText.value = body;
+    } catch {
+      historyPreviewText.value = '内容の読み込みに失敗しました。';
+    }
+  }
+
   // Native menu events
   listen<string>('menu-action', (event) => {
     const action = event.payload;
@@ -903,6 +1050,7 @@ window.addEventListener('DOMContentLoaded', () => {
           togglePreview(title, textarea.value);
         }
         break;
+      case 'history': if (inEditor) openHistory(); break;
       case 'back': if (inEditor) backToList(); break;
     }
   });
