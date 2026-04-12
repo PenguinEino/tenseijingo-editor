@@ -133,6 +133,8 @@ let cells: HTMLElement[][] = [];
 let isComposing = false;
 let compStart = -1;
 let compSuffixLen = 0;
+let compCellCol = -1;
+let compCellRow = -1;
 let autoSaveTimer: number | null = null;
 let mouseIsDown = false;
 let gridCursor: GridCell = { col: 0, row: 5 };
@@ -833,7 +835,14 @@ function render() {
   if (displayCount > BASE_MAX) s += '　<span class="overflow-warn">超過 +' + (displayCount - BASE_MAX) + '</span>';
   statusText.innerHTML = s;
 
-  if (cells[gridCursor.col]?.[gridCursor.row]) {
+  if (isComposing && compCellCol >= 0 && cells[compCellCol]?.[compCellRow]) {
+    // IME変換中: 変換開始セルの右側に固定して候補ウィンドウが文字に重ならないようにする
+    const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
+    textarea.style.left = (rect.right + 2) + 'px';
+    textarea.style.top = rect.top + 'px';
+    textarea.style.width = '1px';
+    textarea.style.height = rect.height + 'px';
+  } else if (cells[gridCursor.col]?.[gridCursor.row]) {
     const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
     textarea.style.left = rect.left + 'px';
     textarea.style.top = rect.top + 'px';
@@ -926,6 +935,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     isComposing = true;
     compStart = textarea.selectionStart;
     compSuffixLen = textarea.value.length - textarea.selectionEnd;
+    // IME候補ウィンドウ固定用: 変換開始時のセル位置を記録
+    compCellCol = gridCursor.col;
+    compCellRow = gridCursor.row;
   });
   textarea.addEventListener('input', () => {
     invalidateCache();
@@ -939,7 +951,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     render();
   });
   textarea.addEventListener('compositionend', () => {
-    isComposing = false; compStart = -1; compSuffixLen = 0;
+    isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     syncFromRaw();
