@@ -207,6 +207,27 @@ body {
 @keyframes blink { 50% { opacity: 0; } }
 .cell.selected { background: #b3d4fc; }
 .cell.kinsoku { background: var(--kinsoku-bg); }
+.cell.bold { font-weight: 900; }
+.cell.bold .tcy { font-weight: 900; }
+.cell.punct {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 0 1px 0 0;
+}
+.cell .rot {
+  display: inline-block;
+  transform: rotate(90deg);
+  transform-origin: center;
+  line-height: 1;
+}
+
+#toolbar button.tb-format {
+  font-family: "游明朝","Yu Mincho","MS 明朝",serif;
+  font-size: 13px; min-width: 26px; padding: 4px 8px;
+}
+#toolbar button.tb-format.active {
+  background: #e8edf5; border-color: #4a7fd4; color: #2c3e50;
+}
 .cell.composing::after {
   content: ''; position: absolute;
   left: 15%; right: 15%; bottom: 10%; height: 2px; background: #333;

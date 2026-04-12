@@ -10,7 +10,9 @@ interface FileEntry {
   updated_at: string;
   char_count: number;
   custom_title: boolean;
+  bold_ranges?: number[][];
 }
+type BoldRange = [number, number];
 interface GridCell { col: number; row: number; }
 interface ColCfg { indent: number; tail: number; }
 interface Unit { type: 'char'|'tcy'|'newline'; text: string; rawStart: number; rawLen: number; }
@@ -30,14 +32,12 @@ interface GitLogEntry {
 
 // ===== Settings & Config =====
 interface AppSettings {
-  previewSpaceWidth: 'half' | 'full';
   kinsokuHead: string;
   kinsokuTail: string;
   kinsokuColorHex: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  previewSpaceWidth: 'full',
   kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
   kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
   kinsokuColorHex: '#d24646'
@@ -83,8 +83,7 @@ const USABLE_END_CACHE: number[] = [];
 function colConfig(c: number): ColCfg {
   if (c < COL_CFG_CACHE.length) return COL_CFG_CACHE[c];
   if (c >= BASE_COLS) return { indent: 0, tail: 0 };
-  if (c === 0) return { indent: 5, tail: 0 };
-  if (c >= 1 && c <= 5) return { indent: 4, tail: 0 };
+  if (c >= 0 && c <= 5) return { indent: 4, tail: 0 };
   if (c >= 32) return { indent: 0, tail: 1 };
   return { indent: 0, tail: 0 };
 }
@@ -115,6 +114,8 @@ let currentFileId: string | null = null;
 let currentTitle = '';
 let currentCustomTitle = false;
 let isDirty = false;
+let boldRanges: BoldRange[] = [];
+let prevRawText = '';
 
 // ===== DOM refs =====
 let fileManagerEl: HTMLElement;
@@ -126,6 +127,7 @@ let statusText: HTMLElement;
 let editorTitleEl: HTMLElement;
 let saveStatusEl: HTMLElement;
 let fmFileInput: HTMLInputElement;
+let boldBtnEl: HTMLElement | null = null;
 
 // ===== Editor state =====
 let totalCols = BASE_COLS;
@@ -137,6 +139,7 @@ let compCellCol = -1;
 let compCellRow = -1;
 let autoSaveTimer: number | null = null;
 let mouseIsDown = false;
+let mouseAnchorCell: GridCell | null = null;
 let gridCursor: GridCell = { col: 0, row: 5 };
 let anchorPos = 0;
 let activePos = 0;
@@ -147,6 +150,11 @@ const FLAG_CURSOR   = 1;
 const FLAG_COMPOSING = 2;
 const FLAG_SELECTED = 4;
 const FLAG_KINSOKU  = 8;
+const FLAG_BOLD     = 16;
+const FLAG_PUNCT    = 32;
+const FLAG_ROT      = 64;
+const PUNCT_SET = new Set<string>(['、', '。', '，', '．', ',', '.']);
+const ROTATE_SET = new Set<string>(['ー', '−', '—', '―', '–', '～', '〜', '…', '‥']);
 let prevCellStates: CellState[][] = [];
 let renderRAF = 0;
 
@@ -164,6 +172,114 @@ function getUnitsAndFlow(): { units: Unit[]; flow: FlowResult } {
   cachedUnits = textToUnits(text);
   cachedFlow = flowToGrid(cachedUnits);
   return { units: cachedUnits, flow: cachedFlow };
+}
+
+// ===== Bold Ranges =====
+function mergeBoldRanges(ranges: BoldRange[]): BoldRange[] {
+  if (ranges.length === 0) return [];
+  const sorted = ranges.filter(r => r[1] > r[0]).sort((a, b) => a[0] - b[0]);
+  if (sorted.length === 0) return [];
+  const out: BoldRange[] = [[sorted[0][0], sorted[0][1]]];
+  for (let i = 1; i < sorted.length; i++) {
+    const last = out[out.length - 1];
+    if (sorted[i][0] <= last[1]) {
+      if (sorted[i][1] > last[1]) last[1] = sorted[i][1];
+    } else {
+      out.push([sorted[i][0], sorted[i][1]]);
+    }
+  }
+  return out;
+}
+
+function isPosBold(pos: number): boolean {
+  for (const [s, e] of boldRanges) {
+    if (pos < s) return false;
+    if (pos < e) return true;
+  }
+  return false;
+}
+
+function isRangeFullyBold(start: number, end: number): boolean {
+  if (start >= end) return false;
+  let cursor = start;
+  for (const [s, e] of boldRanges) {
+    if (e <= cursor) continue;
+    if (s > cursor) return false;
+    cursor = e;
+    if (cursor >= end) return true;
+  }
+  return cursor >= end;
+}
+
+function diffAdjustBoldRanges(oldText: string, newText: string) {
+  if (oldText === newText) return;
+  const oLen = oldText.length, nLen = newText.length;
+  let pre = 0;
+  const minLen = Math.min(oLen, nLen);
+  while (pre < minLen && oldText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
+  let oEnd = oLen, nEnd = nLen;
+  while (oEnd > pre && nEnd > pre && oldText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
+    oEnd--; nEnd--;
+  }
+  const delta = nEnd - oEnd;
+  const next: BoldRange[] = [];
+  for (const [s, e] of boldRanges) {
+    if (e <= pre) { next.push([s, e]); continue; }
+    if (s >= oEnd) { next.push([s + delta, e + delta]); continue; }
+    const leftE = Math.min(e, pre);
+    if (leftE > s) next.push([s, leftE]);
+    const rightS = Math.max(s, oEnd);
+    if (e > rightS) next.push([rightS + delta, e + delta]);
+  }
+  boldRanges = mergeBoldRanges(next);
+}
+
+function addBoldRange(start: number, end: number) {
+  if (end <= start) return;
+  boldRanges = mergeBoldRanges([...boldRanges, [start, end]]);
+}
+
+function removeBoldRange(start: number, end: number) {
+  if (end <= start) return;
+  const next: BoldRange[] = [];
+  for (const [s, e] of boldRanges) {
+    if (e <= start || s >= end) { next.push([s, e]); continue; }
+    if (s < start) next.push([s, start]);
+    if (e > end) next.push([end, e]);
+  }
+  boldRanges = next;
+}
+
+function toggleBoldSelection() {
+  const start = Math.min(anchorPos, activePos);
+  const end = Math.max(anchorPos, activePos);
+  if (start >= end) return;
+  if (isRangeFullyBold(start, end)) removeBoldRange(start, end);
+  else addBoldRange(start, end);
+  markDirty();
+  updateBoldButtonState();
+  scheduleRender();
+}
+
+function updateBoldButtonState() {
+  if (!boldBtnEl) return;
+  const start = Math.min(anchorPos, activePos);
+  const end = Math.max(anchorPos, activePos);
+  let active: boolean;
+  if (start === end) active = isPosBold(start);
+  else active = isRangeFullyBold(start, end);
+  boldBtnEl.classList.toggle('active', active);
+}
+
+function boldRangesForSave(): number[][] {
+  return boldRanges.map(r => [r[0], r[1]]);
+}
+
+function loadBoldFromEntry(entry: FileEntry) {
+  const raw = entry.bold_ranges;
+  if (!raw || !Array.isArray(raw)) boldRanges = [];
+  else boldRanges = mergeBoldRanges(raw.map(r => [r[0], r[1]] as BoldRange));
+  prevRawText = entry.body;
 }
 
 // ===== Custom Dialogs =====
@@ -224,10 +340,43 @@ let previewCopyBtn: HTMLElement;
 let previewVisible = false;
 let previewDirty = false;
 
+function formatBodyAsLines(body: string): string {
+  const units = textToUnits(body);
+  const flow = flowToGrid(units);
+  const { grid, unitPos } = flow;
+
+  if (units.length === 0) return "";
+
+  let maxCol = 0;
+  for (let i = unitPos.length - 1; i >= 0; i--) {
+    if (unitPos[i]) {
+      maxCol = unitPos[i].col;
+      if (units[i].type === 'newline') maxCol++;
+      break;
+    }
+  }
+
+  const lines: string[] = [];
+  for (let c = 0; c <= maxCol; c++) {
+    let lineStr = "";
+    const start = usableStart(c);
+    const end = usableEnd(c);
+    for (let r = start; r < end; r++) {
+      const ui = grid[c][r];
+      if (ui !== null) {
+        const u = units[ui];
+        if (u.type !== 'newline') lineStr += u.text;
+      }
+    }
+    lines.push(lineStr);
+  }
+  return lines.join('\n');
+}
+
 function getFormattedPreviewText(): string {
   const { units, flow } = getUnitsAndFlow();
   const { grid, unitPos } = flow;
-  
+
   if (units.length === 0) return "";
 
   // 最後のユニットの位置から、出力すべき最大行（列）数を計算
@@ -259,24 +408,6 @@ function getFormattedPreviewText(): string {
       }
     }
     lines.push(lineStr);
-  }
-
-  const chkSpace = document.getElementById('chk-preview-space') as HTMLInputElement;
-  if (chkSpace && chkSpace.checked) {
-    const sp = appSettings.previewSpaceWidth === 'full' ? '　' : ' ';
-    const sp4 = sp + sp + sp + sp;
-    const sp5 = sp4 + sp;
-    for (let i = 0; i < lines.length; i++) {
-      if (i === 0) {
-        lines[i] = sp5 + lines[i];
-      } else if (i >= 1 && i <= 5) {
-        lines[i] = sp4 + lines[i];
-      }
-      // 後ろの3行 (基準35行換算で33〜35行目)
-      if (i >= 32 && i <= 34) {
-        lines[i] = lines[i] + sp;
-      }
-    }
   }
 
   return lines.join('\n');
@@ -350,7 +481,7 @@ async function refreshFileList() {
         <div class="fm-item-preview">${escHtml(preview)}</div>
       </div>
       <div class="fm-item-actions">
-        <button class="act-preview">表示</button>
+        <button class="act-preview">プレビュー</button>
         <button class="act-export">書出</button>
         <button class="act-delete danger">削除</button>
       </div>`;
@@ -383,6 +514,7 @@ async function openFile(id: string) {
   currentTitle = f.title;
   currentCustomTitle = f.custom_title;
   textarea.value = f.body;
+  loadBoldFromEntry(f);
   isDirty = false;
   invalidateCache();
   resetCursor();
@@ -402,7 +534,8 @@ async function exportFileFromList(f: FileEntry) {
     filters: [{ name: 'テキストファイル', extensions: ['txt'] }],
   });
   if (!path) return;
-  await invoke('export_file_to', { id: f.id, dest: path });
+  const content = formatBodyAsLines(f.body);
+  await invoke('export_file_to', { dest: path, content });
   showNotification('書き出しました');
 }
 
@@ -430,7 +563,7 @@ function showEditor() {
 
 async function saveCurrentFile() {
   if (!currentFileId) return;
-  const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+  const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
   currentTitle = entry.title;
   currentCustomTitle = entry.custom_title;
   isDirty = false;
@@ -453,7 +586,7 @@ async function renameCurrentFile() {
 async function exportCurrentFile() {
   if (!currentFileId) return;
   if (isDirty) {
-    const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+    const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
     currentTitle = entry.title;
     isDirty = false;
   }
@@ -462,7 +595,8 @@ async function exportCurrentFile() {
     filters: [{ name: 'テキストファイル', extensions: ['txt'] }],
   });
   if (!path) return;
-  await invoke('export_file_to', { id: currentFileId, dest: path });
+  const content = getFormattedPreviewText();
+  await invoke('export_file_to', { dest: path, content });
   showNotification('書き出しました');
 }
 
@@ -476,7 +610,7 @@ function scheduleAutoSave() {
   autoSaveTimer = window.setTimeout(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -511,7 +645,7 @@ function markDirty() {
 
 async function backToList() {
   if (currentFileId && isDirty) {
-    await invoke('save_file', { id: currentFileId, body: textarea.value });
+    await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
   }
   currentFileId = null;
   hidePreview();
@@ -709,6 +843,15 @@ function moveColumn(colDelta: number, extend: boolean) {
   updateSelection(); syncFromRaw(); scheduleRender();
 }
 
+function cellRawEnd(col: number, row: number): number {
+  const { units, flow } = getUnitsAndFlow();
+  if (col < flow.grid.length && flow.grid[col][row] !== null) {
+    const u = units[flow.grid[col][row]!];
+    return u.rawStart + u.rawLen;
+  }
+  return cellToNearestRaw(col, row);
+}
+
 function cellToNearestRaw(col: number, row: number): number {
   const { units, flow } = getUnitsAndFlow();
   const text = textarea.value;
@@ -774,6 +917,9 @@ function render() {
         if (isComposing && compStart >= 0 && compEnd > compStart && u.rawStart >= compStart && u.rawStart + u.rawLen <= compEnd) flags |= FLAG_COMPOSING;
         if (r === colStart && u.type === 'char' && kinsokuHeadSet.has(u.text)) flags |= FLAG_KINSOKU;
         if (r === colEnd - 1 && u.type === 'char' && kinsokuTailSet.has(u.text)) flags |= FLAG_KINSOKU;
+        if (u.type !== 'newline' && isPosBold(u.rawStart)) flags |= FLAG_BOLD;
+        if (u.type === 'char' && PUNCT_SET.has(u.text)) flags |= FLAG_PUNCT;
+        if (u.type === 'char' && ROTATE_SET.has(u.text)) flags |= FLAG_ROT;
       }
 
       // Newline marker
@@ -798,6 +944,11 @@ function render() {
         cell.textContent = '';
         const span = document.createElement('span');
         span.className = 'tcy'; span.textContent = newText;
+        cell.appendChild(span);
+      } else if (newType === 'char' && (flags & FLAG_ROT)) {
+        cell.textContent = '';
+        const span = document.createElement('span');
+        span.className = 'rot'; span.textContent = newText;
         cell.appendChild(span);
       } else if (newType === 'nl-mark') {
         // May have char content + newline mark overlay
@@ -826,6 +977,8 @@ function render() {
       cell.classList.toggle('composing', !!(flags & FLAG_COMPOSING));
       cell.classList.toggle('selected', !!(flags & FLAG_SELECTED));
       cell.classList.toggle('kinsoku', !!(flags & FLAG_KINSOKU));
+      cell.classList.toggle('bold', !!(flags & FLAG_BOLD));
+      cell.classList.toggle('punct', !!(flags & FLAG_PUNCT));
     }
   }
 
@@ -837,6 +990,8 @@ function render() {
 
   // IME変換中はtextarea位置を更新しない（compositionstartで固定済み）
   // 変換中に位置を動かすとIMEがリセットされ候補が消える
+  updateBoldButtonState();
+
   if (!isComposing && cells[gridCursor.col]?.[gridCursor.row]) {
     const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
     textarea.style.left = rect.left + 'px';
@@ -860,7 +1015,10 @@ function onCellMouseDown(e: MouseEvent) {
   if (!cr) { textarea.focus(); return; }
   e.preventDefault();
   activePos = cellToNearestRaw(cr.col, cr.row);
-  if (!e.shiftKey) anchorPos = activePos;
+  if (!e.shiftKey) {
+    anchorPos = activePos;
+    mouseAnchorCell = cr;
+  }
   mouseIsDown = true;
   updateSelection(); syncFromRaw(); textarea.focus(); render();
 }
@@ -884,6 +1042,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   editorTitleEl = document.getElementById('editor-title')!;
   saveStatusEl = document.getElementById('save-status')!;
   fmFileInput = document.getElementById('fm-file-input') as HTMLInputElement;
+  boldBtnEl = document.getElementById('btn-bold');
 
   // Preview panel
   previewPanel = document.getElementById('preview-panel')!;
@@ -891,10 +1050,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   previewTextEl = document.getElementById('preview-text') as HTMLTextAreaElement;
   previewCopyBtn = document.getElementById('btn-preview-copy')!;
   document.getElementById('btn-preview-close')!.addEventListener('click', hidePreview);
-  document.getElementById('chk-preview-space')?.addEventListener('change', () => {
-    markPreviewDirty();
-    flushPreview();
-  });
   previewCopyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(previewTextEl.value).then(() => {
       previewCopyBtn.textContent = 'コピー済';
@@ -921,6 +1076,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     togglePreview(title);
   });
   document.getElementById('btn-history')!.addEventListener('click', openHistory);
+  document.getElementById('btn-bold')!.addEventListener('mousedown', (e) => { e.preventDefault(); });
+  document.getElementById('btn-bold')!.addEventListener('click', () => {
+    toggleBoldSelection();
+    textarea.focus();
+  });
   document.getElementById('chk-grid')!.addEventListener('change', (e) => {
     gridEl.classList.toggle('no-gridlines', !(e.target as HTMLInputElement).checked);
   });
@@ -943,6 +1103,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
   textarea.addEventListener('input', () => {
+    diffAdjustBoldRanges(prevRawText, textarea.value);
+    prevRawText = textarea.value;
     invalidateCache();
     if (!isComposing) {
       anchorPos = activePos = textarea.selectionStart;
@@ -950,11 +1112,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       markDirty();
       updateTitleDisplay();
       markPreviewDirty();
+      updateBoldButtonState();
     }
     render();
   });
   textarea.addEventListener('compositionend', () => {
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
+    diffAdjustBoldRanges(prevRawText, textarea.value);
+    prevRawText = textarea.value;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     syncFromRaw();
@@ -962,6 +1127,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     updateTitleDisplay();
     markPreviewDirty();
     flushPreview();
+    updateBoldButtonState();
     render();
   });
 
@@ -1010,6 +1176,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     case 's':
       if (ctrl) { e.preventDefault(); saveCurrentFile(); return; }
       break;
+    case 'b':
+    case 'B':
+      if (ctrl) { e.preventDefault(); toggleBoldSelection(); return; }
+      break;
     }
   });
 
@@ -1017,10 +1187,30 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('mousemove', (e) => {
     if (!mouseIsDown) return;
     const cr = cellFromEvent(e); if (!cr) return;
-    activePos = cellToNearestRaw(cr.col, cr.row);
+    if (mouseAnchorCell) {
+      const isSame = cr.col === mouseAnchorCell.col && cr.row === mouseAnchorCell.row;
+      if (isSame) {
+        activePos = cellToNearestRaw(cr.col, cr.row);
+        anchorPos = activePos;
+      } else {
+        const anchorStart = cellToNearestRaw(mouseAnchorCell.col, mouseAnchorCell.row);
+        const anchorEnd = cellRawEnd(mouseAnchorCell.col, mouseAnchorCell.row);
+        const activeStart = cellToNearestRaw(cr.col, cr.row);
+        const activeEnd = cellRawEnd(cr.col, cr.row);
+        if (activeStart < anchorStart) {
+          anchorPos = anchorEnd;
+          activePos = activeStart;
+        } else {
+          anchorPos = anchorStart;
+          activePos = activeEnd;
+        }
+      }
+    } else {
+      activePos = cellToNearestRaw(cr.col, cr.row);
+    }
     updateSelection(); syncFromRaw(); render();
   });
-  document.addEventListener('mouseup', () => { mouseIsDown = false; });
+  document.addEventListener('mouseup', () => { mouseIsDown = false; mouseAnchorCell = null; });
   document.addEventListener('mousedown', (e) => {
     if (editorScreenEl.style.display !== 'none' && !(e.target as HTMLElement).closest('#toolbar') && (e.target as HTMLElement).tagName !== 'INPUT' && !(e.target as HTMLElement).closest('#preview-panel'))
       setTimeout(() => textarea.focus(), 0);
@@ -1037,7 +1227,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('blur', async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -1051,7 +1241,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   setInterval(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -1082,6 +1272,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     textarea.value = entry.body;
     currentTitle = entry.title;
     currentCustomTitle = entry.custom_title;
+    loadBoldFromEntry(entry);
     isDirty = false;
     invalidateCache();
     resetCursor();
@@ -1106,7 +1297,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!currentFileId) return;
     // Save before showing history
     if (isDirty) {
-      await invoke('save_file', { id: currentFileId, body: textarea.value });
+      await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
       isDirty = false;
       updateSaveStatus();
     }
@@ -1162,8 +1353,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   const inputSettingHead = document.getElementById('setting-kinsoku-head') as HTMLInputElement;
   const inputSettingTail = document.getElementById('setting-kinsoku-tail') as HTMLInputElement;
   const inputSettingColor = document.getElementById('setting-kinsoku-color') as HTMLInputElement;
-  const radioSpaceHalf = document.querySelector('input[name="setting-space"][value="half"]') as HTMLInputElement;
-  const radioSpaceFull = document.querySelector('input[name="setting-space"][value="full"]') as HTMLInputElement;
 
   btnSettings.addEventListener('click', openSettings);
   btnSettingsClose.addEventListener('click', closeSettings);
@@ -1171,7 +1360,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (e.target === settingsOverlay) closeSettings();
   });
   btnSettingsSave.addEventListener('click', () => {
-    appSettings.previewSpaceWidth = radioSpaceFull.checked ? 'full' : 'half';
     appSettings.kinsokuHead = inputSettingHead.value;
     appSettings.kinsokuTail = inputSettingTail.value;
     appSettings.kinsokuColorHex = inputSettingColor.value;
@@ -1190,8 +1378,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   function openSettings() {
-    if (appSettings.previewSpaceWidth === 'full') radioSpaceFull.checked = true;
-    else radioSpaceHalf.checked = true;
     inputSettingHead.value = appSettings.kinsokuHead;
     inputSettingTail.value = appSettings.kinsokuTail;
     inputSettingColor.value = appSettings.kinsokuColorHex;

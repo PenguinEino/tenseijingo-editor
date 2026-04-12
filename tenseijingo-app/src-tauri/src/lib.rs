@@ -16,6 +16,8 @@ struct FileEntry {
     char_count: usize,
     #[serde(default)]
     custom_title: bool,
+    #[serde(default)]
+    bold_ranges: Vec<[usize; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +275,7 @@ fn create_file(app: tauri::AppHandle) -> String {
         updated_at: now_iso(),
         char_count: 0,
         custom_title: false,
+        bold_ranges: Vec::new(),
     };
     let path = file_path(&app, &id);
     fs::write(&path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
@@ -292,7 +295,12 @@ fn read_file(app: tauri::AppHandle, id: String) -> Result<FileEntry, String> {
 }
 
 #[tauri::command]
-fn save_file(app: tauri::AppHandle, id: String, body: String) -> Result<FileEntry, String> {
+fn save_file(
+    app: tauri::AppHandle,
+    id: String,
+    body: String,
+    bold_ranges: Option<Vec<[usize; 2]>>,
+) -> Result<FileEntry, String> {
     let path = file_path(&app, &id);
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut entry: FileEntry = serde_json::from_str(&data).map_err(|e| e.to_string())?;
@@ -302,6 +310,9 @@ fn save_file(app: tauri::AppHandle, id: String, body: String) -> Result<FileEntr
     }
     entry.body = body;
     entry.updated_at = now_iso();
+    if let Some(ranges) = bold_ranges {
+        entry.bold_ranges = ranges;
+    }
     let json = serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
 
@@ -364,11 +375,8 @@ fn delete_file(app: tauri::AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn export_file_to(app: tauri::AppHandle, id: String, dest: String) -> Result<(), String> {
-    let path = file_path(&app, &id);
-    let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let entry: FileEntry = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    fs::write(&dest, &entry.body).map_err(|e| e.to_string())
+fn export_file_to(dest: String, content: String) -> Result<(), String> {
+    fs::write(&dest, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -502,7 +510,7 @@ pub fn run() {
                 .item(&MenuItemBuilder::with_id("export", "書き出し…").accelerator("CmdOrCtrl+Shift+E").build(app)?)
                 .separator()
                 .item(&MenuItemBuilder::with_id("rename", "名前変更…").build(app)?)
-                .item(&MenuItemBuilder::with_id("preview", "テキスト表示").accelerator("CmdOrCtrl+P").build(app)?)
+                .item(&MenuItemBuilder::with_id("preview", "プレビュー").accelerator("CmdOrCtrl+P").build(app)?)
                 .item(&MenuItemBuilder::with_id("history", "版履歴").accelerator("CmdOrCtrl+H").build(app)?)
                 .separator()
                 .item(&MenuItemBuilder::with_id("back", "一覧に戻る").accelerator("CmdOrCtrl+W").build(app)?)
