@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save, open } from "@tauri-apps/plugin-dialog";
 
 // ===== Types =====
 interface FileEntry {
@@ -870,7 +870,7 @@ function resetCursor() {
 // ============================================================
 //  INIT
 // ============================================================
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   fileManagerEl = document.getElementById('file-manager')!;
   editorScreenEl = document.getElementById('editor-screen')!;
   fmListEl = document.getElementById('fm-list')!;
@@ -1208,5 +1208,57 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  showFileManager();
+  // ===== Data Dir UI =====
+  const fmDatadirPath = document.getElementById('fm-datadir-path')!;
+
+  async function updateDataDirDisplay() {
+    const dir: string = await invoke('get_data_dir');
+    fmDatadirPath.textContent = dir;
+  }
+
+  async function chooseFolder(): Promise<string | null> {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === 'string') return selected;
+    return null;
+  }
+
+  document.getElementById('fm-datadir-change')!.addEventListener('click', async () => {
+    const dir = await chooseFolder();
+    if (!dir) return;
+    if (!(await customConfirm(`保存先を変更しますか？\n\n${dir}\n\n※ 既存の原稿は移動されません。`))) return;
+    await invoke('set_data_dir', { path: dir });
+    await updateDataDirDisplay();
+    refreshFileList();
+    showNotification('保存先を変更しました');
+  });
+
+  // ===== Setup Screen (first launch) =====
+  const setupScreen = document.getElementById('setup-screen')!;
+  const isFirst: boolean = await invoke('is_first_launch');
+
+  if (isFirst) {
+    const defaultDir: string = await invoke('get_default_data_dir');
+    document.getElementById('setup-path-display')!.textContent = defaultDir;
+
+    setupScreen.style.display = 'flex';
+
+    document.getElementById('setup-default')!.addEventListener('click', async () => {
+      await invoke('set_default_data_dir');
+      setupScreen.style.display = 'none';
+      await updateDataDirDisplay();
+      showFileManager();
+    });
+
+    document.getElementById('setup-choose')!.addEventListener('click', async () => {
+      const dir = await chooseFolder();
+      if (!dir) return;
+      await invoke('set_data_dir', { path: dir });
+      setupScreen.style.display = 'none';
+      await updateDataDirDisplay();
+      showFileManager();
+    });
+  } else {
+    await updateDataDirDisplay();
+    showFileManager();
+  }
 });

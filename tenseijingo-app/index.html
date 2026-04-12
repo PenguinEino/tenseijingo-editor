@@ -9,6 +9,19 @@
 </head>
 <body>
 
+<!-- 初回セットアップ画面 -->
+<div id="setup-screen" style="display:none;">
+  <div id="setup-box">
+    <h1>天声人語エディタ</h1>
+    <p class="setup-desc">原稿の保存先フォルダを選んでください。</p>
+    <div id="setup-path-display"></div>
+    <div id="setup-actions">
+      <button id="setup-default" class="primary-btn">デフォルトの場所を使う</button>
+      <button id="setup-choose">フォルダを選択…</button>
+    </div>
+  </div>
+</div>
+
 <!-- ファイル管理画面 -->
 <div id="file-manager" style="display:none;">
   <div id="fm-header">
@@ -19,6 +32,11 @@
         <button id="fm-import">読込</button>
         <input type="file" id="fm-file-input" accept=".txt" style="display:none">
       </div>
+    </div>
+    <div id="fm-datadir-bar">
+      <span id="fm-datadir-label">保存先:</span>
+      <span id="fm-datadir-path"></span>
+      <button id="fm-datadir-change">変更</button>
     </div>
   </div>
   <div id="fm-list-wrapper">

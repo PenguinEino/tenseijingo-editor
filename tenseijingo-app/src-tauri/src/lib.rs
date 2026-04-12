@@ -18,6 +18,12 @@ struct FileEntry {
     custom_title: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppConfig {
+    #[serde(default)]
+    data_dir: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct GitLogEntry {
     commit_hash: String,
@@ -26,12 +32,52 @@ struct GitLogEntry {
     char_count: usize,
 }
 
-fn data_dir(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app
-        .path()
+fn config_path(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
         .app_data_dir()
         .expect("failed to get app data dir")
-        .join("manuscripts");
+        .join("config.json")
+}
+
+fn load_config(app: &tauri::AppHandle) -> AppConfig {
+    let path = config_path(app);
+    if path.exists() {
+        if let Ok(data) = fs::read_to_string(&path) {
+            if let Ok(config) = serde_json::from_str::<AppConfig>(&data) {
+                return config;
+            }
+        }
+    }
+    AppConfig { data_dir: None }
+}
+
+fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .expect("failed to get app data dir");
+    if !base.exists() {
+        fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    }
+    let path = config_path(app);
+    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+fn default_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("failed to get app data dir")
+        .join("manuscripts")
+}
+
+fn data_dir(app: &tauri::AppHandle) -> PathBuf {
+    let config = load_config(app);
+    let dir = if let Some(ref custom) = config.data_dir {
+        PathBuf::from(custom)
+    } else {
+        default_data_dir(app)
+    };
     if !dir.exists() {
         fs::create_dir_all(&dir).expect("failed to create data dir");
     }
@@ -158,6 +204,44 @@ fn get_file_content_at_commit(
 }
 
 // ===== Tauri Commands =====
+
+#[tauri::command]
+fn is_first_launch(app: tauri::AppHandle) -> bool {
+    !config_path(&app).exists()
+}
+
+#[tauri::command]
+fn get_data_dir(app: tauri::AppHandle) -> String {
+    data_dir(&app).to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn get_default_data_dir(app: tauri::AppHandle) -> String {
+    default_data_dir(&app).to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn set_data_dir(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let dir = PathBuf::from(&path);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    let mut config = load_config(&app);
+    config.data_dir = Some(path);
+    save_config(&app, &config)
+}
+
+#[tauri::command]
+fn set_default_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = default_data_dir(&app);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    let mut config = load_config(&app);
+    config.data_dir = None;
+    save_config(&app, &config)?;
+    Ok(dir.to_string_lossy().to_string())
+}
 
 #[tauri::command]
 fn list_files(app: tauri::AppHandle) -> Vec<FileEntry> {
@@ -451,6 +535,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            is_first_launch,
+            get_data_dir,
+            get_default_data_dir,
+            set_data_dir,
+            set_default_data_dir,
             list_files,
             create_file,
             read_file,

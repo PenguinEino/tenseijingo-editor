@@ -9,6 +9,40 @@ body {
   overflow: hidden;
 }
 
+/* ===== Setup Screen ===== */
+#setup-screen {
+  width: 100%; height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: #f0f1f4;
+}
+#setup-box {
+  background: #fff; border-radius: 12px; padding: 40px 48px; text-align: center;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.08); max-width: 520px; width: 90%;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+#setup-box h1 {
+  font-size: 20px; font-weight: 700; color: #2c3e50; margin-bottom: 12px;
+}
+.setup-desc {
+  font-size: 13px; color: #666; margin-bottom: 20px; line-height: 1.6;
+}
+#setup-path-display {
+  font-size: 11px; color: #999; background: #f5f6f8; border-radius: 6px;
+  padding: 8px 12px; margin-bottom: 20px; word-break: break-all;
+  min-height: 32px; display: flex; align-items: center; justify-content: center;
+}
+#setup-actions { display: flex; gap: 10px; justify-content: center; }
+#setup-actions button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 13px; padding: 8px 20px; border: 1px solid #c0c4cc;
+  border-radius: 6px; background: #fff; cursor: pointer; color: #444;
+  transition: all 0.15s;
+}
+#setup-actions button:hover { background: #f5f6f8; }
+#setup-actions .primary-btn {
+  background: #4a7fd4; color: #fff; border-color: #4a7fd4; font-weight: 600;
+}
+#setup-actions .primary-btn:hover { background: #3b6fc4; }
+
 /* ===== File Manager ===== */
 #file-manager {
   width: 100%; height: 100vh; display: flex; flex-direction: column;
@@ -27,6 +61,26 @@ body {
   font-size: 16px; font-weight: 700; color: #2c3e50; letter-spacing: 0.5px;
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
 }
+#fm-datadir-bar {
+  max-width: 700px; margin: 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 0 8px;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; color: #999;
+}
+#fm-datadir-label { flex-shrink: 0; }
+#fm-datadir-path {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1; direction: rtl; text-align: left;
+}
+#fm-datadir-change {
+  flex-shrink: 0; font-size: 11px; padding: 2px 8px;
+  border: 1px solid #d0d3d8; border-radius: 3px;
+  background: #fff; cursor: pointer; color: #666;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  transition: all 0.15s;
+}
+#fm-datadir-change:hover { background: #f5f6f8; }
 #fm-actions { display: flex; gap: 8px; }
 #fm-actions button {
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
