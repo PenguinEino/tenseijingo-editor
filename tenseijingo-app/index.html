@@ -42,6 +42,7 @@
       <button id="btn-export">書出</button>
       <button id="btn-preview">表示</button>
       <button id="btn-history">履歴</button>
+      <button id="btn-settings" title="設定" style="cursor:pointer; border:none; background:transparent; font-size:15px; padding:0 4px; vertical-align:middle;">⚙️</button>
       <span class="tb-divider"></span>
       <label class="tb-check"><input type="checkbox" id="chk-grid" checked> 罫線</label>
     </div>
@@ -55,6 +56,7 @@
       <div id="preview-header">
         <span id="preview-title"></span>
         <div id="preview-header-actions">
+          <label class="tb-check" style="margin-right: 8px;"><input type="checkbox" id="chk-preview-space"> 空白を挿入</label>
           <button id="btn-preview-copy">コピー</button>
           <button id="btn-preview-close">✕</button>
         </div>
@@ -103,6 +105,42 @@
         </div>
         <textarea id="history-preview-text" readonly></textarea>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 設定モーダル -->
+<div id="settings-overlay" style="display:none;">
+  <div id="settings-box">
+    <div id="settings-header">
+      <span id="settings-title">設定</span>
+      <button id="settings-close">✕</button>
+    </div>
+    <div id="settings-body">
+      <div class="setting-group">
+        <label class="setting-label">プレビュー時の空白挿入文字</label>
+        <div class="setting-controls">
+          <label><input type="radio" name="setting-space" value="half"> 半角スペース</label>
+          <label style="margin-left:14px;"><input type="radio" name="setting-space" value="full"> 全角スペース</label>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">行頭禁則文字</label>
+        <input type="text" id="setting-kinsoku-head" class="setting-input">
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">行末禁則文字</label>
+        <input type="text" id="setting-kinsoku-tail" class="setting-input">
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">禁則マスの強調色</label>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input type="color" id="setting-kinsoku-color">
+        </div>
+      </div>
+    </div>
+    <div id="settings-footer">
+      <button class="primary-btn" id="btn-settings-save">保存</button>
     </div>
   </div>
 </div>

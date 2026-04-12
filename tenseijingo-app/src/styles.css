@@ -1,4 +1,4 @@
-:root { --cell: 34px; --fs: 19px; --tcy: 12px; }
+:root { --cell: 34px; --fs: 19px; --tcy: 12px; --kinsoku-bg: rgba(210, 70, 70, 0.13); }
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -152,7 +152,7 @@ body {
 }
 @keyframes blink { 50% { opacity: 0; } }
 .cell.selected { background: #b3d4fc; }
-.cell.kinsoku { background: rgba(210, 70, 70, 0.13); }
+.cell.kinsoku { background: var(--kinsoku-bg); }
 .cell.composing::after {
   content: ''; position: absolute;
   left: 15%; right: 15%; bottom: 10%; height: 2px; background: #333;
@@ -247,12 +247,14 @@ body {
 #btn-preview-close { color: #999; border-color: transparent; background: transparent; font-size: 13px; }
 #btn-preview-close:hover { color: #555; background: #eee; }
 #preview-text {
-  flex: 1; resize: none; border: none; outline: none;
-  padding: 14px; margin: 0;
+  flex: 1; resize: none; outline: none;
+  padding: 12px; margin: 12px;
   font-family: "游明朝","Yu Mincho","MS 明朝",serif;
-  font-size: 14px; line-height: 1.9; color: #333;
-  background: #fff; border-top: none;
+  font-size: 14px; line-height: 1.6; color: #333;
+  background: #fff; border: 1px solid #c0c4cc;
+  border-radius: 6px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.06);
   -webkit-user-select: text; user-select: text;
+  cursor: text;
 }
 
 /* ===== Save Status Animation ===== */
@@ -261,6 +263,62 @@ body {
   font-size: 10px; color: #aaa;
   transition: color 0.3s, opacity 0.3s;
 }
+
+/* ===== Settings Modal ===== */
+#settings-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  z-index: 2000; display: flex; align-items: center; justify-content: center;
+}
+#settings-box {
+  background: #fff; border-radius: 12px;
+  width: 90vw; max-width: 500px;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.2);
+  display: flex; flex-direction: column;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  overflow: hidden;
+}
+#settings-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid #e2e5ea;
+}
+#settings-title { font-size: 15px; font-weight: 700; color: #2c3e50; }
+#settings-close {
+  font-size: 16px; color: #999; border: none; background: transparent;
+  cursor: pointer; padding: 4px 8px; border-radius: 4px;
+}
+#settings-close:hover { color: #555; background: #f0f1f4; }
+#settings-body {
+  padding: 16px 20px;
+}
+.setting-group {
+  margin-bottom: 20px;
+}
+.setting-label {
+  display: block; font-size: 13px; font-weight: 600; color: #444;
+  margin-bottom: 8px;
+}
+.setting-input {
+  width: 100%; border: 1px solid #d0d3d8; border-radius: 6px;
+  padding: 8px 12px; font-size: 14px; color: #333; outline: none;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+.setting-input:focus {
+  border-color: #4a7fd4;
+  box-shadow: 0 0 0 2px rgba(74,127,212,0.2);
+}
+.setting-controls label {
+  font-size: 13px; color: #333; cursor: pointer;
+}
+#settings-footer {
+  padding: 12px 18px; border-top: 1px solid #e2e5ea;
+  text-align: right; background: #fafbfc;
+}
+.primary-btn {
+  background: #4a7fd4; color: #fff; border: none; padding: 8px 16px;
+  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  transition: all 0.15s;
+}
+.primary-btn:hover { background: #3b6bba; }
 #save-status.saving {
   color: #4a7fd4;
 }

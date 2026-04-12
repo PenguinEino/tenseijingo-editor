@@ -28,11 +28,53 @@ interface GitLogEntry {
   char_count: number;
 }
 
+// ===== Settings & Config =====
+interface AppSettings {
+  previewSpaceWidth: 'half' | 'full';
+  kinsokuHead: string;
+  kinsokuTail: string;
+  kinsokuColorHex: string;
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  previewSpaceWidth: 'half',
+  kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
+  kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
+  kinsokuColorHex: '#d24646'
+};
+
+let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
+
+let kinsokuHeadSet = new Set(appSettings.kinsokuHead);
+let kinsokuTailSet = new Set(appSettings.kinsokuTail);
+
+function applySettings(settings: AppSettings) {
+  kinsokuHeadSet = new Set(settings.kinsokuHead);
+  kinsokuTailSet = new Set(settings.kinsokuTail);
+  // Apply CSS variable for color with 13% opacity
+  let hex = settings.kinsokuColorHex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c+c).join('');
+  const r = parseInt(hex.substring(0, 2), 16) || 210;
+  const g = parseInt(hex.substring(2, 4), 16) || 70;
+  const b = parseInt(hex.substring(4, 6), 16) || 70;
+  document.documentElement.style.setProperty('--kinsoku-bg', `rgba(${r}, ${g}, ${b}, 0.13)`);
+}
+
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem('user_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      appSettings = { ...DEFAULT_SETTINGS, ...parsed };
+    }
+  } catch(e) {}
+  applySettings(appSettings);
+}
+loadSettings();
+
 // ===== Constants =====
 const BASE_COLS = 35;
 const ROWS = 18;
-const KINSOKU_HEAD_SET = new Set('、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・');
-const KINSOKU_TAIL_SET = new Set('（(「『【〈《〔｛{▼▽△▲');
 
 // Pre-compute column configs
 const COL_CFG_CACHE: ColCfg[] = [];
@@ -180,10 +222,69 @@ let previewCopyBtn: HTMLElement;
 let previewVisible = false;
 let previewDirty = false;
 
+function getFormattedPreviewText(): string {
+  const { units, flow } = getUnitsAndFlow();
+  const { grid, unitPos } = flow;
+  
+  if (units.length === 0) return "";
+
+  // 最後のユニットの位置から、出力すべき最大行（列）数を計算
+  let maxCol = 0;
+  for (let i = unitPos.length - 1; i >= 0; i--) {
+    if (unitPos[i]) {
+      maxCol = unitPos[i].col;
+      // 最後が明示的な改行なら次の行（列）まで出力する
+      if (units[i].type === 'newline') {
+        maxCol++;
+      }
+      break;
+    }
+  }
+
+  let lines: string[] = [];
+  for (let c = 0; c <= maxCol; c++) {
+    let lineStr = "";
+    const start = usableStart(c);
+    const end = usableEnd(c);
+
+    for (let r = start; r < end; r++) {
+      const ui = grid[c][r];
+      if (ui !== null) {
+        const u = units[ui];
+        if (u.type !== 'newline') {
+          lineStr += u.text;
+        }
+      }
+    }
+    lines.push(lineStr);
+  }
+
+  const chkSpace = document.getElementById('chk-preview-space') as HTMLInputElement;
+  if (chkSpace && chkSpace.checked) {
+    const sp = appSettings.previewSpaceWidth === 'full' ? '　' : ' ';
+    const sp4 = sp + sp + sp + sp;
+    const sp5 = sp4 + sp;
+    for (let i = 0; i < lines.length; i++) {
+      if (i === 0) {
+        lines[i] = sp5 + lines[i];
+      } else if (i >= 1 && i <= 5) {
+        lines[i] = sp4 + lines[i];
+      }
+      // 後ろの3行 (基準35行換算で33〜35行目)
+      if (i >= 32 && i <= 34) {
+        lines[i] = lines[i] + sp;
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function togglePreview(title: string, body: string) {
   if (previewVisible) { hidePreview(); return; }
   previewTitleEl.textContent = title;
-  previewTextEl.value = body;
+  const chkSpace = document.getElementById('chk-preview-space') as HTMLInputElement;
+  previewTextEl.value = getFormattedPreviewText();
   previewPanel.style.display = 'flex';
   previewVisible = true;
   previewDirty = false;
@@ -195,7 +296,7 @@ function flushPreview() {
   previewDirty = false;
   const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
   previewTitleEl.textContent = title;
-  previewTextEl.value = textarea.value;
+  previewTextEl.value = getFormattedPreviewText();
 }
 function hidePreview() {
   previewPanel.style.display = 'none';
@@ -670,8 +771,8 @@ function render() {
         newText = u.text;
         if (hasSelection && u.rawStart >= selMin && u.rawStart < selMax) flags |= FLAG_SELECTED;
         if (isComposing && compStart >= 0 && compEnd > compStart && u.rawStart >= compStart && u.rawStart + u.rawLen <= compEnd) flags |= FLAG_COMPOSING;
-        if (r === colStart && u.type === 'char' && KINSOKU_HEAD_SET.has(u.text)) flags |= FLAG_KINSOKU;
-        if (r === colEnd - 1 && u.type === 'char' && KINSOKU_TAIL_SET.has(u.text)) flags |= FLAG_KINSOKU;
+        if (r === colStart && u.type === 'char' && kinsokuHeadSet.has(u.text)) flags |= FLAG_KINSOKU;
+        if (r === colEnd - 1 && u.type === 'char' && kinsokuTailSet.has(u.text)) flags |= FLAG_KINSOKU;
       }
 
       // Newline marker
@@ -787,6 +888,10 @@ window.addEventListener('DOMContentLoaded', () => {
   previewTextEl = document.getElementById('preview-text') as HTMLTextAreaElement;
   previewCopyBtn = document.getElementById('btn-preview-copy')!;
   document.getElementById('btn-preview-close')!.addEventListener('click', hidePreview);
+  document.getElementById('chk-preview-space')?.addEventListener('change', () => {
+    markPreviewDirty();
+    flushPreview();
+  });
   previewCopyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(previewTextEl.value).then(() => {
       previewCopyBtn.textContent = 'コピー済';
@@ -1033,6 +1138,55 @@ window.addEventListener('DOMContentLoaded', () => {
     } catch {
       historyPreviewText.value = '内容の読み込みに失敗しました。';
     }
+  }
+
+  // ===== Settings Modal =====
+  const settingsOverlay = document.getElementById('settings-overlay')!;
+  const btnSettings = document.getElementById('btn-settings')!;
+  const btnSettingsClose = document.getElementById('settings-close')!;
+  const btnSettingsSave = document.getElementById('btn-settings-save')!;
+  const inputSettingHead = document.getElementById('setting-kinsoku-head') as HTMLInputElement;
+  const inputSettingTail = document.getElementById('setting-kinsoku-tail') as HTMLInputElement;
+  const inputSettingColor = document.getElementById('setting-kinsoku-color') as HTMLInputElement;
+  const radioSpaceHalf = document.querySelector('input[name="setting-space"][value="half"]') as HTMLInputElement;
+  const radioSpaceFull = document.querySelector('input[name="setting-space"][value="full"]') as HTMLInputElement;
+
+  btnSettings.addEventListener('click', openSettings);
+  btnSettingsClose.addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('click', (e) => {
+    if (e.target === settingsOverlay) closeSettings();
+  });
+  btnSettingsSave.addEventListener('click', () => {
+    appSettings.previewSpaceWidth = radioSpaceFull.checked ? 'full' : 'half';
+    appSettings.kinsokuHead = inputSettingHead.value;
+    appSettings.kinsokuTail = inputSettingTail.value;
+    appSettings.kinsokuColorHex = inputSettingColor.value;
+
+    localStorage.setItem('user_settings', JSON.stringify(appSettings));
+    applySettings(appSettings);
+    
+    // Refresh the view
+    invalidateCache();
+    syncFromRaw();
+    render();
+    if (previewVisible) flushPreview();
+    
+    closeSettings();
+    showNotification('設定を保存しました');
+  });
+
+  function openSettings() {
+    if (appSettings.previewSpaceWidth === 'full') radioSpaceFull.checked = true;
+    else radioSpaceHalf.checked = true;
+    inputSettingHead.value = appSettings.kinsokuHead;
+    inputSettingTail.value = appSettings.kinsokuTail;
+    inputSettingColor.value = appSettings.kinsokuColorHex;
+    settingsOverlay.style.display = 'flex';
+  }
+
+  function closeSettings() {
+    settingsOverlay.style.display = 'none';
+    textarea.focus();
   }
 
   // Native menu events
