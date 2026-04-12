@@ -2,6 +2,7 @@ name: 'Release'
 
 on:
   push:
+    branches: [main]
     tags:
       - 'v*'
   workflow_dispatch:
@@ -10,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -56,8 +57,9 @@ jobs:
         working-directory: ./tenseijingo-app
         run: npm install
 
-      - name: Build Tauri app
-        id: tauri-build
+      # タグpush時: ビルド＋リリース作成
+      - name: Build and release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -69,8 +71,15 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      # mainブランチpush時: ビルドのみ（キャッシュを温める）
+      - name: Build (cache warm)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: ./tenseijingo-app
+
       - name: Create portable zip (Windows)
-        if: matrix.portable
+        if: matrix.portable && startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
@@ -79,7 +88,7 @@ jobs:
           Compress-Archive -Path $exePath -DestinationPath $zipName
 
       - name: Upload portable zip to release (Windows)
-        if: matrix.portable
+        if: matrix.portable && startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
