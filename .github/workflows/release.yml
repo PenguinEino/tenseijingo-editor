@@ -13,7 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, windows-latest]
+        include:
+          - platform: macos-latest
+            portable: false
+          - platform: windows-latest
+            portable: true
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -52,6 +56,7 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
+        id: tauri-build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,3 +67,22 @@ jobs:
           releaseBody: 'Release v__VERSION__'
           releaseDraft: false
           prerelease: false
+
+      - name: Create portable zip (Windows)
+        if: matrix.portable
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $exePath = "tenseijingo-app/src-tauri/target/release/tenseijingo-app.exe"
+          $zipName = "tenseijingo-editor_${version}_x64_portable.zip"
+          Compress-Archive -Path $exePath -DestinationPath $zipName
+
+      - name: Upload portable zip to release (Windows)
+        if: matrix.portable
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $zipName = "tenseijingo-editor_${version}_x64_portable.zip"
+          gh release upload ${{ github.ref_name }} $zipName --clobber
