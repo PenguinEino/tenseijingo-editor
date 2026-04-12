@@ -1,0 +1,256 @@
+:root { --cell: 34px; --fs: 19px; --tcy: 12px; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "游明朝","Yu Mincho","YuMincho","ヒラギノ明朝 ProN","Hiragino Mincho ProN","MS 明朝","MS Mincho",serif;
+  background: #f0f1f4;
+  display: flex; flex-direction: column;
+  min-height: 100vh; user-select: none; -webkit-user-select: none;
+  overflow: hidden;
+}
+
+/* ===== File Manager ===== */
+#file-manager {
+  width: 100%; height: 100vh; display: flex; flex-direction: column;
+  background: #f0f1f4;
+}
+#fm-header {
+  background: #fff; border-bottom: 1px solid #d8dbe0;
+  padding: 0 20px; flex-shrink: 0;
+}
+#fm-header-inner {
+  max-width: 700px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 0;
+}
+#fm-header h1 {
+  font-size: 16px; font-weight: 700; color: #2c3e50; letter-spacing: 0.5px;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+#fm-actions { display: flex; gap: 8px; }
+#fm-actions button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; padding: 6px 14px; border: 1px solid #c0c4cc;
+  border-radius: 4px; background: #fff; cursor: pointer; color: #444;
+  transition: all 0.15s;
+}
+#fm-actions button:hover { background: #f5f6f8; border-color: #aab; }
+#fm-new { background: #4a7fd4 !important; color: #fff !important; border-color: #4a7fd4 !important; font-weight: 600; }
+#fm-new:hover { background: #3b6fc4 !important; }
+
+#fm-list-wrapper {
+  flex: 1; overflow-y: auto; padding: 20px;
+  display: flex; justify-content: center;
+}
+#fm-list { width: 100%; max-width: 700px; }
+
+.fm-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px; background: #fff; border: 1px solid #e2e5ea;
+  border-radius: 8px; margin-bottom: 8px; cursor: pointer;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  transition: all 0.15s;
+}
+.fm-item:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.07); border-color: #ccd; }
+.fm-item-info { flex: 1; min-width: 0; }
+.fm-item-title {
+  font-size: 14px; font-weight: 600; color: #2c3e50;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fm-item-meta { font-size: 11px; color: #999; margin-top: 3px; }
+.fm-item-preview {
+  font-size: 12px; color: #777; margin-top: 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: "游明朝","Yu Mincho","MS 明朝",serif;
+}
+.fm-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.fm-item-actions button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; padding: 4px 10px; border: 1px solid #d0d3d8;
+  border-radius: 4px; background: #fff; cursor: pointer; color: #666;
+  transition: all 0.15s;
+}
+.fm-item-actions button:hover { background: #f5f6f8; }
+.fm-item-actions button.danger { color: #c44; border-color: #e0b0b0; }
+.fm-item-actions button.danger:hover { background: #fef0f0; }
+.fm-empty {
+  text-align: center; padding: 80px 20px; color: #b0b4bc;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 14px; line-height: 2;
+}
+
+/* ===== Editor Toolbar ===== */
+#editor-screen {
+  width: 100%; height: 100vh; display: flex; flex-direction: column;
+}
+#toolbar {
+  padding: 0 12px; background: #fff; border-bottom: 1px solid #d8dbe0;
+  width: 100%; display: flex; align-items: center;
+  height: 40px; flex-shrink: 0; z-index: 10;
+}
+.tb-left { display: flex; align-items: center; }
+.tb-center {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  gap: 8px; min-width: 0;
+}
+.tb-right { display: flex; align-items: center; gap: 6px; }
+
+#toolbar button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; padding: 4px 10px; border: 1px solid #d0d3d8;
+  border-radius: 4px; background: #fff; cursor: pointer; color: #555;
+  transition: all 0.15s; white-space: nowrap;
+}
+#toolbar button:hover { background: #f5f6f8; border-color: #bbc; }
+#btn-back { color: #4a7fd4; border-color: transparent; background: transparent; }
+#btn-back:hover { background: #eef2fa; }
+#btn-save { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
+#btn-save:hover { background: #3b6fc4; }
+
+#editor-title {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 13px; font-weight: 600; color: #2c3e50;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 300px;
+}
+#save-status {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 10px; color: #aaa;
+}
+
+.tb-divider { width: 1px; height: 18px; background: #e0e3e8; margin: 0 2px; }
+.tb-check {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; color: #888; cursor: pointer;
+  display: flex; align-items: center; gap: 3px;
+}
+
+/* ===== Grid ===== */
+#grid-wrapper {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+  padding: 10px; overflow: auto; min-width: 0;
+}
+#grid {
+  display: inline-flex; flex-direction: row-reverse;
+  gap: 1px; background-color: #c8ccd2; padding: 1px; line-height: 1;
+}
+.column { display: flex; flex-direction: column; gap: 1px; }
+.column.overflow-sep {
+  margin-right: 5px; border-right: 2px dashed #a0a4aa; padding-right: 1px;
+}
+.cell {
+  width: var(--cell); height: var(--cell); background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs); cursor: text; position: relative;
+}
+.cell.indent, .cell.tail-empty { background: #f4f5f7; }
+.cell.cursor-cell { background: #e8edf5; }
+.cell.cursor-cell::after {
+  content: ''; position: absolute; top: 8%; bottom: 8%;
+  left: 50%; width: 1.5px; transform: translateX(-50%);
+  background: #3b6fd4; animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.cell.selected { background: #b3d4fc; }
+.cell.kinsoku { background: rgba(210, 70, 70, 0.13); }
+.cell.composing::after {
+  content: ''; position: absolute;
+  left: 15%; right: 15%; bottom: 10%; height: 2px; background: #333;
+  animation: none;
+  top: auto; width: auto; transform: none;
+}
+.cell .tcy {
+  font-size: var(--tcy); letter-spacing: -1px; white-space: nowrap; line-height: 1;
+}
+.cell .newline-mark { color: #c0c4cc; font-size: 70%; pointer-events: none; }
+
+#grid.no-gridlines { gap: 0; padding: 0; background: transparent; }
+#grid.no-gridlines .column { gap: 0; }
+#grid.no-gridlines .column.overflow-sep { margin-right: 0; border-right: none; padding-right: 0; }
+
+/* ===== Status Bar ===== */
+#status-bar {
+  padding: 4px 20px; background: #f8f9fa; border-top: 1px solid #d8dbe0;
+  text-align: center; font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; color: #999; z-index: 10; flex-shrink: 0; width: 100%;
+}
+.overflow-warn { color: #c44; font-weight: bold; }
+
+#hidden-input {
+  position: fixed; left: 0; top: 0; width: 2px; height: 2px;
+  opacity: 0; z-index: -1; border: none; resize: none; outline: none;
+  overflow: hidden; padding: 0; font-size: 16px;
+}
+
+/* ===== Modal Dialog ===== */
+#modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.3);
+  z-index: 2000; display: flex; align-items: center; justify-content: center;
+}
+#modal-box {
+  background: #fff; border-radius: 10px; padding: 24px 28px;
+  min-width: 340px; max-width: 440px; box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+#modal-message {
+  font-size: 14px; color: #333; margin-bottom: 16px; line-height: 1.6;
+}
+#modal-input {
+  width: 100%; padding: 8px 12px; font-size: 14px; border: 1px solid #d0d3d8;
+  border-radius: 5px; margin-bottom: 18px; outline: none;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+#modal-input:focus { border-color: #5b8bd4; box-shadow: 0 0 0 2px rgba(74,127,212,0.15); }
+#modal-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+#modal-buttons button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 13px; padding: 7px 20px; border: 1px solid #d0d3d8;
+  border-radius: 5px; background: #fff; cursor: pointer; color: #555;
+  transition: all 0.15s;
+}
+#modal-buttons button:hover { background: #f5f6f8; }
+#modal-ok { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
+#modal-ok:hover { background: #3b6fc4; }
+
+/* ===== Editor Body (grid + preview side-by-side) ===== */
+#editor-body {
+  flex: 1 1 auto; display: flex; overflow: hidden; width: 100%;
+}
+#editor-body > #grid-wrapper { flex: 1 1 auto; }
+
+/* ===== Preview Side Panel ===== */
+#preview-panel {
+  width: 320px; flex-shrink: 0;
+  border-left: 1px solid #d8dbe0; background: #fafbfc;
+  display: flex; flex-direction: column;
+}
+#preview-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid #e2e5ea; flex-shrink: 0;
+}
+#preview-title {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; font-weight: 600; color: #2c3e50;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 1;
+}
+#preview-header-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: 8px; }
+#preview-header-actions button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; padding: 3px 10px; border: 1px solid #d0d3d8;
+  border-radius: 4px; background: #fff; cursor: pointer; color: #555;
+  transition: all 0.15s;
+}
+#preview-header-actions button:hover { background: #f0f1f4; }
+#btn-preview-copy { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
+#btn-preview-copy:hover { background: #3b6fc4; }
+#btn-preview-close { color: #999; border-color: transparent; background: transparent; font-size: 13px; }
+#btn-preview-close:hover { color: #555; background: #eee; }
+#preview-text {
+  flex: 1; resize: none; border: none; outline: none;
+  padding: 14px; margin: 0;
+  font-family: "游明朝","Yu Mincho","MS 明朝",serif;
+  font-size: 14px; line-height: 1.9; color: #333;
+  background: #fff; border-top: none;
+  -webkit-user-select: text; user-select: text;
+}

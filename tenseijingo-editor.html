@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>天声人語エディタ</title>
+<style>
+:root { --cell: 34px; --fs: 19px; --tcy: 12px; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: "游明朝","Yu Mincho","YuMincho","ヒラギノ明朝 ProN","Hiragino Mincho ProN","MS 明朝","MS Mincho",serif;
+  background: #eef0f2;
+  display: flex; flex-direction: column; align-items: center;
+  min-height: 100vh; user-select: none; -webkit-user-select: none;
+  overflow: hidden;
+}
+
+/* Toolbar */
+#toolbar {
+  padding: 6px 16px; background: #fff; border-bottom: 1px solid #d0d3d8;
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  justify-content: center; flex-wrap: wrap; z-index: 10; flex-shrink: 0;
+}
+#toolbar h1 {
+  font-size: 14px; font-weight: 600; color: #333; margin-right: 10px;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+}
+#toolbar button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; padding: 4px 12px; border: 1px solid #c0c4cc;
+  border-radius: 3px; background: #fff; cursor: pointer; color: #444;
+}
+#toolbar button:hover { background: #f0f1f3; }
+#toolbar label {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; color: #555; cursor: pointer; display: flex; align-items: center; gap: 3px;
+}
+.toolbar-sep { width: 1px; height: 20px; background: #d8dbe0; margin: 0 2px; }
+
+/* Grid */
+#grid-wrapper {
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+  padding: 10px; overflow: auto; width: 100%;
+}
+#grid {
+  display: inline-flex; flex-direction: row-reverse;
+  gap: 1px; background-color: #c8ccd2; padding: 1px; line-height: 1;
+}
+.column { display: flex; flex-direction: column; gap: 1px; }
+
+/* Overflow separator */
+.column.overflow-sep {
+  margin-right: 5px;
+  border-right: 2px dashed #a0a4aa;
+  padding-right: 1px;
+}
+
+.cell {
+  width: var(--cell); height: var(--cell); background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs); cursor: text; position: relative;
+}
+.cell.indent, .cell.tail-empty { background: #f4f5f7; }
+
+.cell.cursor-cell { background: #e8edf5; }
+.cell.cursor-cell::after {
+  content: ''; position: absolute; top: 8%; bottom: 8%;
+  left: 50%; width: 1.5px; transform: translateX(-50%);
+  background: #3b6fd4; animation: blink 1s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.cell.selected { background: #b3d4fc; }
+.cell.kinsoku { background: rgba(210, 70, 70, 0.13); }
+
+.cell.composing::before {
+  content: ''; position: absolute;
+  left: 15%; right: 15%; bottom: 12%; height: 1.5px; background: #444;
+}
+.cell .tcy {
+  font-size: var(--tcy); letter-spacing: -1px; white-space: nowrap; line-height: 1;
+}
+.cell .newline-mark { color: #c0c4cc; font-size: 70%; pointer-events: none; }
+
+#grid.no-gridlines { gap: 0; padding: 0; background: transparent; }
+#grid.no-gridlines .column { gap: 0; }
+#grid.no-gridlines .column.overflow-sep { margin-right: 0; border-right: none; padding-right: 0; }
+
+/* Status Bar */
+#status-bar {
+  padding: 4px 20px; background: #f8f9fa; border-top: 1px solid #d0d3d8;
+  text-align: center; font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; color: #777; z-index: 10; flex-shrink: 0; width: 100%;
+}
+.overflow-warn { color: #c44; font-weight: bold; }
+
+#hidden-input {
+  position: fixed; left: 0; top: 0; width: 2px; height: 2px;
+  opacity: 0; z-index: -1; border: none; resize: none; outline: none;
+  overflow: hidden; padding: 0; font-size: 16px;
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>天声人語エディタ</h1>
+  <div class="toolbar-sep"></div>
+  <button id="btn-save" title="Ctrl+S">保存</button>
+  <button id="btn-load">読込</button>
+  <button id="btn-export">書出</button>
+  <button id="btn-import">読入</button>
+  <div class="toolbar-sep"></div>
+  <button id="btn-clear">消去</button>
+  <div class="toolbar-sep"></div>
+  <label><input type="checkbox" id="chk-grid" checked> 罫線</label>
+</div>
+
+<div id="grid-wrapper">
+  <div id="grid"></div>
+</div>
+
+<div id="status-bar">
+  <span id="status-text">0 / 602 文字</span>
+</div>
+
+<textarea id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+<input type="file" id="file-input" accept=".txt" style="display:none">
+
+<script>
+(function() {
+  'use strict';
+
+  const BASE_COLS = 35;
+  const ROWS = 18;
+  const KINSOKU_HEAD = '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・';
+  const KINSOKU_TAIL = '（(「『【〈《〔｛{▼▽△▲';
+
+  function colConfig(c) {
+    if (c >= BASE_COLS) return { indent: 0, tail: 0 };
+    if (c === 0) return { indent: 5, tail: 0 };
+    if (c >= 1 && c <= 5) return { indent: 4, tail: 0 };
+    if (c >= 32) return { indent: 0, tail: 1 };
+    return { indent: 0, tail: 0 };
+  }
+  function usableStart(c) { return colConfig(c).indent; }
+  function usableEnd(c) { return ROWS - colConfig(c).tail; }
+  function capacity(c) { return usableEnd(c) - usableStart(c); }
+
+  let BASE_MAX = 0;
+  for (let c = 0; c < BASE_COLS; c++) BASE_MAX += capacity(c);
+
+  const gridEl = document.getElementById('grid');
+  const textarea = document.getElementById('hidden-input');
+  const statusText = document.getElementById('status-text');
+  const fileInput = document.getElementById('file-input');
+
+  let totalCols = BASE_COLS;
+  let cells = [];
+  let isComposing = false;
+  let compStart = -1;
+  let saveTimer = null;
+  let mouseIsDown = false;
+  let gridCursor = { col: 0, row: 5 };
+  let anchorCell = { col: 0, row: 5 };
+  let anchorPos = 0;
+  let activePos = 0;
+
+  // ===== Responsive sizing =====
+  function recalcSize() {
+    const toolbarH = document.getElementById('toolbar').offsetHeight;
+    const statusH = document.getElementById('status-bar').offsetHeight;
+    const wrapPad = 20;
+    const overflowGap = totalCols > BASE_COLS ? 8 : 0;
+
+    const availW = window.innerWidth - wrapPad * 2;
+    const availH = window.innerHeight - toolbarH - statusH - wrapPad * 2;
+
+    const cellFromW = (availW - totalCols - 1 - overflowGap) / totalCols;
+    const cellFromH = (availH - ROWS - 1) / ROWS;
+    const cellSize = Math.max(14, Math.min(52, Math.floor(Math.min(cellFromW, cellFromH))));
+    const fontSize = Math.max(7, Math.round(cellSize * 0.55));
+    const tcySize = Math.max(5, Math.round(fontSize * 0.63));
+
+    document.documentElement.style.setProperty('--cell', cellSize + 'px');
+    document.documentElement.style.setProperty('--fs', fontSize + 'px');
+    document.documentElement.style.setProperty('--tcy', tcySize + 'px');
+  }
+
+  window.addEventListener('resize', () => { recalcSize(); render(); });
+
+  // ===== Build Grid DOM =====
+  function buildGrid() {
+    gridEl.innerHTML = '';
+    cells = [];
+    for (let c = 0; c < totalCols; c++) {
+      const colDiv = document.createElement('div');
+      colDiv.className = 'column';
+      if (c === BASE_COLS) colDiv.classList.add('overflow-sep');
+      const cfg = colConfig(c);
+      cells[c] = [];
+      for (let r = 0; r < ROWS; r++) {
+        const cellDiv = document.createElement('div');
+        cellDiv.className = 'cell';
+        if (r < cfg.indent) cellDiv.classList.add('indent');
+        if (cfg.tail > 0 && r >= ROWS - cfg.tail) cellDiv.classList.add('tail-empty');
+        cellDiv.dataset.col = c;
+        cellDiv.dataset.row = r;
+        cellDiv.addEventListener('mousedown', onCellMouseDown);
+        colDiv.appendChild(cellDiv);
+        cells[c][r] = cellDiv;
+      }
+      gridEl.appendChild(colDiv);
+    }
+  }
+
+  // ===== Text Processing =====
+  function textToUnits(text) {
+    const units = [];
+    let i = 0;
+    while (i < text.length) {
+      if (text[i] === '\n') {
+        units.push({ type: 'newline', text: '\n', rawStart: i, rawLen: 1 });
+        i++;
+      } else if (isDigit(text[i])) {
+        let run = 0, j = i;
+        while (j < text.length && isDigit(text[j])) { run++; j++; }
+        if (run === 2) {
+          units.push({ type: 'tcy', text: toHalfDigit(text[i]) + toHalfDigit(text[i+1]), rawStart: i, rawLen: 2 });
+          i += 2;
+        } else {
+          for (let k = i; k < j; k++)
+            units.push({ type: 'char', text: toHalfDigit(text[k]), rawStart: k, rawLen: 1 });
+          i = j;
+        }
+      } else {
+        units.push({ type: 'char', text: text[i], rawStart: i, rawLen: 1 });
+        i++;
+      }
+    }
+    return units;
+  }
+  function isDigit(ch) { return /[0-9０-９]/.test(ch); }
+  function toHalfDigit(ch) {
+    const fw = '０１２３４５６７８９', idx = fw.indexOf(ch);
+    return idx >= 0 ? String(idx) : ch;
+  }
+
+  // Dynamic flow — grid grows as needed, tracks newline markers
+  function flowToGrid(units) {
+    const grid = [];
+    const unitPos = [];
+    const newlineMarkers = [];
+    let col = 0, row = usableStart(0);
+
+    function ensure(c) { while (grid.length <= c) grid.push(Array(ROWS).fill(null)); }
+
+    for (let ui = 0; ui < units.length; ui++) {
+      const u = units[ui];
+      if (u.type === 'newline') {
+        unitPos.push({ col, row: -1 });
+        if (row < usableEnd(col)) newlineMarkers.push({ col, row });
+        col++; row = usableStart(col);
+        continue;
+      }
+      if (row >= usableEnd(col)) { col++; row = usableStart(col); }
+      ensure(col);
+      grid[col][row] = ui;
+      unitPos.push({ col, row });
+      row++;
+    }
+    while (grid.length < BASE_COLS) grid.push(Array(ROWS).fill(null));
+
+    return { grid, unitPos, nextCol: col, nextRow: row, neededCols: Math.max(BASE_COLS, grid.length), newlineMarkers };
+  }
+
+  // ===== Cursor Mapping =====
+  function rawToCell(rawPos, units, flow) {
+    const { unitPos, nextCol, nextRow, newlineMarkers } = flow;
+    if (units.length === 0) return { col: 0, row: usableStart(0) };
+    for (let ui = 0; ui < units.length; ui++) {
+      const u = units[ui];
+      if (rawPos >= u.rawStart && rawPos < u.rawStart + u.rawLen) {
+        if (u.type === 'newline') {
+          // Cursor at newline = show at the marker position in this column
+          const nlCol = unitPos[ui].col;
+          const marker = newlineMarkers.find(m => m.col === nlCol);
+          if (marker) return { col: marker.col, row: marker.row };
+          return { col: nlCol, row: usableStart(nlCol) };
+        }
+        return unitPos[ui];
+      }
+    }
+    return { col: nextCol, row: nextRow };
+  }
+
+  // ===== Sync helper =====
+  function syncFromRaw() {
+    const text = textarea.value;
+    const units = textToUnits(text);
+    const flow = flowToGrid(units);
+    const ac = rawToCell(activePos, units, flow);
+    if (ac) gridCursor = { col: ac.col, row: ac.row };
+    const anc = rawToCell(anchorPos, units, flow);
+    if (anc) anchorCell = { col: anc.col, row: anc.row };
+  }
+
+  function updateSelection() {
+    textarea.selectionStart = Math.min(anchorPos, activePos);
+    textarea.selectionEnd = Math.max(anchorPos, activePos);
+  }
+
+  // ===== Movement: text-position based =====
+  // Up/Down = move one cursor stop backward/forward
+  function moveUnit(delta, extend) {
+    const text = textarea.value;
+    const units = textToUnits(text);
+
+    // Every unit rawStart is a cursor stop, plus text.length
+    const stops = [];
+    const seen = new Set();
+    for (let i = 0; i < units.length; i++) {
+      if (!seen.has(units[i].rawStart)) {
+        stops.push(units[i].rawStart);
+        seen.add(units[i].rawStart);
+      }
+    }
+    if (!seen.has(text.length)) stops.push(text.length);
+
+    // Find current position
+    let curIdx = stops.length - 1;
+    for (let i = 0; i < stops.length; i++) {
+      if (stops[i] >= activePos) { curIdx = i; break; }
+    }
+
+    let newIdx = curIdx + delta;
+    if (newIdx < 0) newIdx = 0;
+    if (newIdx >= stops.length) newIdx = stops.length - 1;
+    activePos = stops[newIdx];
+
+    if (!extend) anchorPos = activePos;
+    updateSelection(); syncFromRaw(); render();
+  }
+
+  // Left/Right = jump to adjacent column, try to keep same row
+  function moveColumn(colDelta, extend) {
+    const text = textarea.value;
+    const units = textToUnits(text);
+    const flow = flowToGrid(units);
+    const { grid, unitPos, nextCol, nextRow } = flow;
+
+    syncFromRaw();
+    const curRow = gridCursor.row;
+    const tc = gridCursor.col + colDelta;
+
+    if (tc < 0 || tc >= flow.neededCols) return;
+
+    // Try exact row in target column
+    if (tc < grid.length && grid[tc][curRow] !== null) {
+      activePos = units[grid[tc][curRow]].rawStart;
+    } else {
+      let found = false;
+      // Find nearest content at or before curRow in target column
+      for (let r = Math.min(curRow, usableEnd(tc) - 1); r >= usableStart(tc); r--) {
+        if (tc < grid.length && grid[tc][r] !== null) {
+          activePos = units[grid[tc][r]].rawStart;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        // Check if text end is in this column
+        if (tc === nextCol && nextRow >= usableStart(tc)) {
+          activePos = text.length;
+          found = true;
+        }
+      }
+      if (!found) {
+        // Empty column — find the newline unit that belongs to this column
+        for (let ui = 0; ui < units.length; ui++) {
+          if (units[ui].type === 'newline' && unitPos[ui].col === tc) {
+            activePos = units[ui].rawStart;
+            found = true;
+            break;
+          }
+        }
+      }
+      if (!found) {
+        // Try finding any content after curRow
+        for (let r = curRow + 1; r < usableEnd(tc); r++) {
+          if (tc < grid.length && grid[tc][r] !== null) {
+            activePos = units[grid[tc][r]].rawStart;
+            found = true;
+            break;
+          }
+        }
+      }
+      if (!found) return;
+    }
+
+    if (!extend) anchorPos = activePos;
+    updateSelection(); syncFromRaw(); render();
+  }
+
+  // Click helper: map a grid cell to the nearest valid text position
+  function cellToNearestRaw(col, row) {
+    const text = textarea.value;
+    const units = textToUnits(text);
+    const flow = flowToGrid(units);
+    const { grid, unitPos, nextCol, nextRow } = flow;
+
+    // Exact match
+    if (col < grid.length && grid[col][row] !== null) {
+      return units[grid[col][row]].rawStart;
+    }
+    // Text-end position
+    if (col === nextCol && row === nextRow) {
+      return text.length;
+    }
+    // Search backward in same column for nearest content
+    for (let r = row - 1; r >= usableStart(col); r--) {
+      if (col < grid.length && grid[col][r] !== null) {
+        const u = units[grid[col][r]];
+        return u.rawStart + u.rawLen;
+      }
+    }
+    // Empty column — find the newline unit in this column
+    for (let ui = 0; ui < units.length; ui++) {
+      if (units[ui].type === 'newline' && unitPos[ui].col === col) {
+        return units[ui].rawStart;
+      }
+    }
+    // Fallback — go to text end
+    return text.length;
+  }
+
+  // ===== Rendering =====
+  function render() {
+    const text = textarea.value;
+    const units = textToUnits(text);
+    const flow = flowToGrid(units);
+    const { grid, unitPos, nextCol, nextRow, neededCols, newlineMarkers } = flow;
+
+    if (neededCols !== totalCols) {
+      totalCols = neededCols;
+      buildGrid();
+      recalcSize();
+    }
+
+    const compEnd = isComposing && compStart >= 0 ? textarea.selectionStart : -1;
+    const displayCount = units.filter(u => u.type !== 'newline').length;
+    const selMin = Math.min(anchorPos, activePos);
+    const selMax = Math.max(anchorPos, activePos);
+    const hasSelection = selMin !== selMax;
+
+    for (let c = 0; c < totalCols; c++) {
+      const colStart = usableStart(c);
+      for (let r = 0; r < ROWS; r++) {
+        const cell = cells[c][r];
+        const ui = (c < grid.length) ? grid[c][r] : null;
+
+        cell.textContent = '';
+        cell.innerHTML = '';
+        cell.classList.remove('cursor-cell', 'composing', 'selected', 'kinsoku');
+
+        if (ui !== null && units[ui]) {
+          const u = units[ui];
+          if (u.type === 'tcy') {
+            const span = document.createElement('span');
+            span.className = 'tcy';
+            span.textContent = u.text;
+            cell.appendChild(span);
+          } else {
+            cell.textContent = u.text;
+          }
+          if (hasSelection && u.rawStart >= selMin && u.rawStart < selMax)
+            cell.classList.add('selected');
+          if (isComposing && compStart >= 0 && compEnd > compStart) {
+            if (u.rawStart >= compStart && u.rawStart + u.rawLen <= compEnd)
+              cell.classList.add('composing');
+          }
+          if (r === colStart && u.type === 'char' && KINSOKU_HEAD.includes(u.text))
+            cell.classList.add('kinsoku');
+          if (r === usableEnd(c) - 1 && u.type === 'char' && KINSOKU_TAIL.includes(u.text))
+            cell.classList.add('kinsoku');
+        }
+
+        if (!isComposing && !hasSelection && c === gridCursor.col && r === gridCursor.row)
+          cell.classList.add('cursor-cell');
+      }
+    }
+
+    // Show newline markers (↵)
+    for (const nm of newlineMarkers) {
+      if (nm.col < totalCols && nm.row < ROWS && cells[nm.col] && cells[nm.col][nm.row]) {
+        const cell = cells[nm.col][nm.row];
+        const mark = document.createElement('span');
+        mark.className = 'newline-mark';
+        mark.textContent = '↵';
+        cell.appendChild(mark);
+      }
+    }
+
+    // Status bar
+    let s = displayCount + ' / ' + BASE_MAX + ' 文字';
+    const charInCol = gridCursor.row - usableStart(gridCursor.col) + 1;
+    s += '  |  第' + (gridCursor.col + 1) + '行 第' + charInCol + '字';
+    if (displayCount > BASE_MAX) s += '  <span class="overflow-warn">超過 +' + (displayCount - BASE_MAX) + '</span>';
+    statusText.innerHTML = s;
+
+    // Position textarea near cursor for IME
+    if (cells[gridCursor.col] && cells[gridCursor.col][gridCursor.row]) {
+      const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
+      textarea.style.left = rect.left + 'px';
+      textarea.style.top = rect.top + 'px';
+      textarea.style.width = rect.width + 'px';
+      textarea.style.height = rect.height + 'px';
+    }
+    scheduleAutoSave();
+  }
+
+  // ===== Event Handlers =====
+  function cellFromEvent(e) {
+    const el = e.target.closest('.cell');
+    if (!el) return null;
+    const col = parseInt(el.dataset.col), row = parseInt(el.dataset.row);
+    const cfg = colConfig(col);
+    if (row < cfg.indent || (cfg.tail > 0 && row >= ROWS - cfg.tail)) return null;
+    return { col, row };
+  }
+
+  function onCellMouseDown(e) {
+    const cr = cellFromEvent(e);
+    if (!cr) { textarea.focus(); return; }
+    e.preventDefault();
+    activePos = cellToNearestRaw(cr.col, cr.row);
+    if (!e.shiftKey) anchorPos = activePos;
+    mouseIsDown = true;
+    updateSelection(); syncFromRaw(); textarea.focus(); render();
+  }
+
+  document.addEventListener('mousemove', (e) => {
+    if (!mouseIsDown) return;
+    const cr = cellFromEvent(e); if (!cr) return;
+    activePos = cellToNearestRaw(cr.col, cr.row);
+    updateSelection(); syncFromRaw(); render();
+  });
+  document.addEventListener('mouseup', () => { mouseIsDown = false; });
+
+  textarea.addEventListener('compositionstart', () => {
+    isComposing = true;
+    compStart = textarea.selectionStart;
+  });
+  textarea.addEventListener('input', () => {
+    if (!isComposing) { anchorPos = activePos = textarea.selectionStart; syncFromRaw(); }
+    render();
+  });
+  textarea.addEventListener('compositionend', () => {
+    isComposing = false; compStart = -1;
+    anchorPos = activePos = textarea.selectionStart; syncFromRaw(); render();
+  });
+
+  textarea.addEventListener('keydown', (e) => {
+    if (isComposing) return;
+    const shift = e.shiftKey, ctrl = e.ctrlKey || e.metaKey;
+    switch (e.key) {
+    case 'ArrowUp':    e.preventDefault(); moveUnit(-1, shift); return;
+    case 'ArrowDown':  e.preventDefault(); moveUnit(1, shift); return;
+    case 'ArrowLeft':  e.preventDefault(); moveColumn(1, shift); return;
+    case 'ArrowRight': e.preventDefault(); moveColumn(-1, shift); return;
+    case 'Home':
+      e.preventDefault();
+      if (ctrl) {
+        activePos = 0;
+      } else {
+        syncFromRaw();
+        const c = gridCursor.col;
+        const units = textToUnits(textarea.value);
+        const flow = flowToGrid(units);
+        let found = false;
+        for (let r = usableStart(c); r < usableEnd(c); r++) {
+          if (c < flow.grid.length && flow.grid[c][r] !== null) {
+            activePos = units[flow.grid[c][r]].rawStart;
+            found = true; break;
+          }
+        }
+        if (!found) activePos = cellToNearestRaw(c, usableStart(c));
+      }
+      if (!shift) anchorPos = activePos;
+      updateSelection(); syncFromRaw(); render(); return;
+    case 'End':
+      e.preventDefault();
+      if (ctrl) {
+        activePos = textarea.value.length;
+      } else {
+        syncFromRaw();
+        const c = gridCursor.col;
+        const units = textToUnits(textarea.value);
+        const flow = flowToGrid(units);
+        let lastPos = activePos;
+        for (let r = usableEnd(c) - 1; r >= usableStart(c); r--) {
+          if (c < flow.grid.length && flow.grid[c][r] !== null) {
+            const u = units[flow.grid[c][r]];
+            lastPos = u.rawStart + u.rawLen;
+            break;
+          }
+        }
+        activePos = lastPos;
+      }
+      if (!shift) anchorPos = activePos;
+      updateSelection(); syncFromRaw(); render(); return;
+    case 'a':
+      if (ctrl) {
+        e.preventDefault();
+        anchorPos = 0; activePos = textarea.value.length;
+        updateSelection(); syncFromRaw(); render(); return;
+      } break;
+    case 's':
+      if (ctrl) { e.preventDefault(); saveToStorage(); return; } break;
+    }
+  });
+
+  // ===== Save / Load / Export =====
+  function scheduleAutoSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { localStorage.setItem('tenseijingo-text', textarea.value); }, 2000);
+  }
+  function saveToStorage() {
+    localStorage.setItem('tenseijingo-text', textarea.value);
+    showNotification('保存しました');
+  }
+  function loadFromStorage() {
+    const saved = localStorage.getItem('tenseijingo-text');
+    if (saved !== null) {
+      textarea.value = saved;
+      resetCursor(); render(); showNotification('読み込みました');
+    } else { showNotification('保存されたデータがありません'); }
+  }
+  function exportText() {
+    const text = textarea.value;
+    if (!text) { showNotification('テキストがありません'); return; }
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const now = new Date();
+    a.download = 'tenseijingo_' + now.getFullYear()
+      + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0')
+      + '_' + String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0') + '.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url); showNotification('ファイルを書き出しました');
+  }
+  function clearText() {
+    if (!textarea.value) return;
+    if (confirm('テキストをすべて消去しますか？')) {
+      textarea.value = ''; resetCursor(); render();
+    }
+  }
+  function resetCursor() {
+    anchorPos = activePos = 0;
+    textarea.selectionStart = textarea.selectionEnd = 0;
+    syncFromRaw();
+  }
+
+  function showNotification(msg) {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
+      + 'background:rgba(30,30,30,0.8);color:#fff;padding:10px 24px;border-radius:6px;'
+      + 'font-size:14px;font-family:"游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;'
+      + 'z-index:1000;pointer-events:none;transition:opacity 0.3s;';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; }, 1200);
+    setTimeout(() => { document.body.removeChild(el); }, 1600);
+  }
+
+  // ===== Toolbar =====
+  document.getElementById('btn-save').addEventListener('click', saveToStorage);
+  document.getElementById('btn-load').addEventListener('click', loadFromStorage);
+  document.getElementById('btn-export').addEventListener('click', exportText);
+  document.getElementById('btn-import').addEventListener('click', () => fileInput.click());
+  document.getElementById('btn-clear').addEventListener('click', clearText);
+  document.getElementById('chk-grid').addEventListener('change', (e) => {
+    gridEl.classList.toggle('no-gridlines', !e.target.checked);
+  });
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      textarea.value = ev.target.result;
+      resetCursor(); render(); showNotification(file.name + ' を読み込みました');
+    };
+    reader.readAsText(file, 'UTF-8'); fileInput.value = '';
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('#toolbar') && e.target.tagName !== 'INPUT')
+      setTimeout(() => textarea.focus(), 0);
+  });
+
+  // ===== Init =====
+  buildGrid();
+  const saved = localStorage.getItem('tenseijingo-text');
+  if (saved) textarea.value = saved;
+  anchorPos = activePos = 0;
+  syncFromRaw();
+  recalcSize();
+  render();
+  textarea.focus();
+})();
+</script>
+</body>
+</html>

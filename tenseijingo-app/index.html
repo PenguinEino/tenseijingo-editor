@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>天声人語エディタ</title>
+<link rel="stylesheet" href="/src/styles.css" />
+<script type="module" src="/src/main.ts" defer></script>
+</head>
+<body>
+
+<!-- ファイル管理画面 -->
+<div id="file-manager" style="display:none;">
+  <div id="fm-header">
+    <div id="fm-header-inner">
+      <h1>天声人語エディタ</h1>
+      <div id="fm-actions">
+        <button id="fm-new">＋ 新規作成</button>
+        <button id="fm-import">読込</button>
+        <input type="file" id="fm-file-input" accept=".txt" style="display:none">
+      </div>
+    </div>
+  </div>
+  <div id="fm-list-wrapper">
+    <div id="fm-list"></div>
+  </div>
+</div>
+
+<!-- エディタ画面 -->
+<div id="editor-screen" style="display:none;">
+  <div id="toolbar">
+    <div class="tb-left">
+      <button id="btn-back" title="ファイル一覧に戻る">◁ 一覧</button>
+    </div>
+    <div class="tb-center">
+      <span id="editor-title">無題</span>
+      <span id="save-status"></span>
+    </div>
+    <div class="tb-right">
+      <button id="btn-save" title="Ctrl+S / ⌘S">保存</button>
+      <button id="btn-rename">名前変更</button>
+      <button id="btn-export">書出</button>
+      <button id="btn-preview">表示</button>
+      <span class="tb-divider"></span>
+      <label class="tb-check"><input type="checkbox" id="chk-grid" checked> 罫線</label>
+    </div>
+  </div>
+
+  <div id="editor-body">
+    <div id="grid-wrapper">
+      <div id="grid"></div>
+    </div>
+    <div id="preview-panel" style="display:none;">
+      <div id="preview-header">
+        <span id="preview-title"></span>
+        <div id="preview-header-actions">
+          <button id="btn-preview-copy">コピー</button>
+          <button id="btn-preview-close">✕</button>
+        </div>
+      </div>
+      <textarea id="preview-text" readonly></textarea>
+    </div>
+  </div>
+
+  <div id="status-bar">
+    <span id="status-text">0 / 602 文字</span>
+  </div>
+</div>
+
+<textarea id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+<!-- カスタムダイアログ -->
+<div id="modal-overlay" style="display:none;">
+  <div id="modal-box">
+    <div id="modal-message"></div>
+    <input type="text" id="modal-input" style="display:none;" />
+    <div id="modal-buttons">
+      <button id="modal-cancel">キャンセル</button>
+      <button id="modal-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
