@@ -70,6 +70,7 @@ jobs:
           releaseBody: 'Release v__VERSION__'
           releaseDraft: false
           prerelease: false
+          releaseAssetNamePattern: 'tenseijingo-editor_[version]_[platform]_[arch][setup][ext]'
 
       # mainブランチpush時: ビルドのみ（キャッシュを温める）
       - name: Build (cache warm)
