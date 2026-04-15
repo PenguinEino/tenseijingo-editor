@@ -4,6 +4,8 @@
   --tcy: 12px;
   --kinsoku-bg: rgba(210, 70, 70, 0.35);
   --base-weight: 500;
+  --weight-stroke: 0px;
+  --weight-shadow: none;
   --grid-color: rgba(168, 173, 182, 0.55);
   --grid-style: solid;
 }
@@ -246,6 +248,9 @@ body {
   display: flex; align-items: center; justify-content: center;
   font-size: var(--fs); cursor: text; position: relative;
   font-weight: var(--base-weight);
+  -webkit-text-stroke: var(--weight-stroke) currentColor;
+  text-shadow: var(--weight-shadow);
+  paint-order: stroke fill;
   border-right: 1px var(--grid-style) var(--grid-color);
   border-bottom: 1px var(--grid-style) var(--grid-color);
 }
@@ -542,6 +547,9 @@ body {
   display: inline-block;
   line-height: 1;
   font-family: "游明朝","Yu Mincho","YuMincho","ヒラギノ明朝 ProN","Hiragino Mincho ProN","MS 明朝","MS Mincho",serif;
+  -webkit-text-stroke: var(--weight-stroke) currentColor;
+  text-shadow: var(--weight-shadow);
+  paint-order: stroke fill;
 }
 #settings-footer {
   padding: 12px 18px; border-top: 1px solid #e2e5ea;

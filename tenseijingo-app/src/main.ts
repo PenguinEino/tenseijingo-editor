@@ -70,6 +70,24 @@ function applySettings(settings: AppSettings) {
   const b = parseInt(hex.substring(4, 6), 16) || 70;
   document.documentElement.style.setProperty('--kinsoku-bg', `rgba(${r}, ${g}, ${b}, 0.35)`);
   document.documentElement.style.setProperty('--base-weight', String(settings.baseFontWeight));
+  const strokeMap: Record<number, string> = {
+    400: '0px',
+    500: '0px',
+    600: '0.12px',
+    700: '0.18px',
+    800: '0.24px',
+    900: '0.3px',
+  };
+  const shadowMap: Record<number, string> = {
+    400: 'none',
+    500: 'none',
+    600: '0.25px 0 currentColor, -0.25px 0 currentColor',
+    700: '0.35px 0 currentColor, -0.35px 0 currentColor, 0 0.2px currentColor',
+    800: '0.45px 0 currentColor, -0.45px 0 currentColor, 0 0.3px currentColor, 0 -0.3px currentColor',
+    900: '0.55px 0 currentColor, -0.55px 0 currentColor, 0 0.4px currentColor, 0 -0.4px currentColor, 0.35px 0.35px currentColor, -0.35px -0.35px currentColor',
+  };
+  document.documentElement.style.setProperty('--weight-stroke', strokeMap[settings.baseFontWeight] ?? '0px');
+  document.documentElement.style.setProperty('--weight-shadow', shadowMap[settings.baseFontWeight] ?? 'none');
   document.documentElement.style.setProperty('--grid-style', settings.gridStyle);
   document.documentElement.dataset.cursorPosition = settings.cursorPosition;
 }
@@ -1090,15 +1108,17 @@ function positionCompositionInput() {
   const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
   const inputWidth = 220;
   const inputHeight = rect.height * 2;
-  const nearTop = toolbarRect ? rect.top < toolbarRect.bottom + rect.height * 3 : false;
+  const nearTop = toolbarRect ? rect.top < toolbarRect.bottom + rect.height * 6 : false;
 
   if (nearTop && toolbarRect) {
-    textarea.style.left = '24px';
+    const placeRight = rect.left < window.innerWidth / 2;
+    textarea.style.left = placeRight ? `${Math.max(24, window.innerWidth - inputWidth - 24)}px` : '24px';
     textarea.style.top = (toolbarRect.bottom + 12) + 'px';
   } else {
-    const maxLeft = Math.max(24, window.innerWidth - inputWidth - 24);
-    textarea.style.left = Math.min(maxLeft, rect.right + 8) + 'px';
-    textarea.style.top = rect.top + 'px';
+    const showLeft = rect.right + inputWidth + 24 > window.innerWidth;
+    const nextLeft = showLeft ? Math.max(24, rect.left - inputWidth - 8) : Math.min(Math.max(24, window.innerWidth - inputWidth - 24), rect.right + 8);
+    textarea.style.left = `${nextLeft}px`;
+    textarea.style.top = `${Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top)}px`;
   }
 
   textarea.style.width = inputWidth + 'px';
@@ -1526,11 +1546,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('fm-datadir-change')!.addEventListener('click', async () => {
     const dir = await chooseFolder();
     if (!dir) return;
-    if (!(await customConfirm(`保存先を変更しますか？\n\n${dir}\n\n※ 既存の原稿は移動されません。`))) return;
-    await invoke('set_data_dir', { path: dir });
+    const currentDir: string = await invoke('get_data_dir');
+    if (dir === currentDir) return;
+    const migrateExisting = await customConfirm(`保存先を変更します。\n\n${dir}\n\n既存の原稿も新しい保存先に引き継ぎますか？`);
+    if (!migrateExisting) {
+      if (!(await customConfirm(`既存の原稿は現在の保存先に残したまま、新しい保存先へ切り替えますか？\n\n${dir}`))) return;
+    }
+    await invoke('switch_data_dir', { path: dir, migrateExisting });
     await updateDataDirDisplay();
     refreshFileList();
-    showNotification('保存先を変更しました');
+    showNotification(migrateExisting ? '保存先を変更して原稿を引き継ぎました' : '保存先を変更しました');
   });
 
   // ===== Setup Screen (first launch) =====

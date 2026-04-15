@@ -66,6 +66,26 @@ fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String>
     fs::write(&path, json).map_err(|e| e.to_string())
 }
 
+fn copy_dir_contents(from: &PathBuf, to: &PathBuf) -> Result<(), String> {
+    if !to.exists() {
+        fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    }
+    for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src = entry.path();
+        let dest = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_dir_contents(&src, &dest)?;
+        } else {
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn default_data_dir(app: &tauri::AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
@@ -228,6 +248,29 @@ fn set_data_dir(app: tauri::AppHandle, path: String) -> Result<(), String> {
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
+    let mut config = load_config(&app);
+    config.data_dir = Some(path);
+    save_config(&app, &config)
+}
+
+#[tauri::command]
+fn switch_data_dir(
+    app: tauri::AppHandle,
+    path: String,
+    migrate_existing: bool,
+) -> Result<(), String> {
+    let current_dir = data_dir(&app);
+    let new_dir = PathBuf::from(&path);
+    if !new_dir.exists() {
+        fs::create_dir_all(&new_dir).map_err(|e| e.to_string())?;
+    }
+
+    let current_canon = fs::canonicalize(&current_dir).unwrap_or(current_dir.clone());
+    let new_canon = fs::canonicalize(&new_dir).unwrap_or(new_dir.clone());
+    if migrate_existing && current_canon != new_canon && current_dir.exists() {
+        copy_dir_contents(&current_dir, &new_dir)?;
+    }
+
     let mut config = load_config(&app);
     config.data_dir = Some(path);
     save_config(&app, &config)
@@ -547,6 +590,7 @@ pub fn run() {
             get_data_dir,
             get_default_data_dir,
             set_data_dir,
+            switch_data_dir,
             set_default_data_dir,
             list_files,
             create_file,
