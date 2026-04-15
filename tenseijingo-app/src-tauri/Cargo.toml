@@ -1,6 +1,6 @@
 [package]
 name = "tenseijingo-app"
-version = "0.1.10"
+version = "0.1.11"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -26,4 +26,3 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
 git2 = "0.19"
 chrono = "0.4"
-
