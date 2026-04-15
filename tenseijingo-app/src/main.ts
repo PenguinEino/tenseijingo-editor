@@ -12,7 +12,6 @@ interface FileEntry {
   custom_title: boolean;
   bold_ranges?: number[][];
 }
-type BoldRange = [number, number];
 interface GridCell { col: number; row: number; }
 interface ColCfg { indent: number; tail: number; }
 interface Unit { type: 'char'|'tcy'|'newline'; text: string; rawStart: number; rawLen: number; }
@@ -35,15 +34,27 @@ interface AppSettings {
   kinsokuHead: string;
   kinsokuTail: string;
   kinsokuColorHex: string;
+  fontScale: number;
+  baseFontWeight: number;
+  gridStyle: 'solid' | 'dashed';
+  tcyScale: number;
+  cursorPosition: 'top' | 'bottom' | 'left' | 'right';
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
   kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
-  kinsokuColorHex: '#d24646'
+  kinsokuColorHex: '#d24646',
+  fontScale: 0.6,
+  baseFontWeight: 500,
+  gridStyle: 'solid',
+  tcyScale: 1.04,
+  cursorPosition: 'top'
 };
 
 let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
+const FONT_SCALE_STEPS = [0.52, 0.58, 0.64, 0.72, 0.82];
+const FONT_WEIGHT_STEPS = [400, 500, 600, 700, 800, 900];
 
 let kinsokuHeadSet = new Set(appSettings.kinsokuHead);
 let kinsokuTailSet = new Set(appSettings.kinsokuTail);
@@ -58,6 +69,9 @@ function applySettings(settings: AppSettings) {
   const g = parseInt(hex.substring(2, 4), 16) || 70;
   const b = parseInt(hex.substring(4, 6), 16) || 70;
   document.documentElement.style.setProperty('--kinsoku-bg', `rgba(${r}, ${g}, ${b}, 0.35)`);
+  document.documentElement.style.setProperty('--base-weight', String(settings.baseFontWeight));
+  document.documentElement.style.setProperty('--grid-style', settings.gridStyle);
+  document.documentElement.dataset.cursorPosition = settings.cursorPosition;
 }
 
 function loadSettings() {
@@ -68,6 +82,11 @@ function loadSettings() {
       appSettings = { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch(e) {}
+  if (!FONT_SCALE_STEPS.includes(appSettings.fontScale)) appSettings.fontScale = DEFAULT_SETTINGS.fontScale;
+  if (!FONT_WEIGHT_STEPS.includes(appSettings.baseFontWeight)) appSettings.baseFontWeight = DEFAULT_SETTINGS.baseFontWeight;
+  if (appSettings.gridStyle !== 'solid' && appSettings.gridStyle !== 'dashed') appSettings.gridStyle = DEFAULT_SETTINGS.gridStyle;
+  if (typeof appSettings.tcyScale !== 'number' || Number.isNaN(appSettings.tcyScale)) appSettings.tcyScale = DEFAULT_SETTINGS.tcyScale;
+  if (!['top', 'bottom', 'left', 'right'].includes(appSettings.cursorPosition)) appSettings.cursorPosition = DEFAULT_SETTINGS.cursorPosition;
   applySettings(appSettings);
 }
 loadSettings();
@@ -114,9 +133,6 @@ let currentFileId: string | null = null;
 let currentTitle = '';
 let currentCustomTitle = false;
 let isDirty = false;
-let boldRanges: BoldRange[] = [];
-let isBoldMode = false;
-let prevRawText = '';
 
 // ===== DOM refs =====
 let fileManagerEl: HTMLElement;
@@ -128,7 +144,12 @@ let statusText: HTMLElement;
 let editorTitleEl: HTMLElement;
 let saveStatusEl: HTMLElement;
 let fmFileInput: HTMLInputElement;
-let boldBtnEl: HTMLElement | null = null;
+let fontSizeValueEl: HTMLElement;
+let fontWeightValueEl: HTMLElement;
+let gridSolidBtnEl: HTMLButtonElement;
+let gridDashedBtnEl: HTMLButtonElement;
+let settingsPreviewMode: 'char' | 'tcy' = 'char';
+let settingsCursorPreviewPosition: AppSettings['cursorPosition'] = 'top';
 
 // ===== Editor state =====
 let totalCols = BASE_COLS;
@@ -139,7 +160,6 @@ let compSuffixLen = 0;
 let compCellCol = -1;
 let compCellRow = -1;
 let autoSaveTimer: number | null = null;
-let preCompositionText = '';
 let mouseIsDown = false;
 let mouseAnchorCell: GridCell | null = null;
 let gridCursor: GridCell = { col: 0, row: 5 };
@@ -152,13 +172,33 @@ const FLAG_CURSOR   = 1;
 const FLAG_COMPOSING = 2;
 const FLAG_SELECTED = 4;
 const FLAG_KINSOKU  = 8;
-const FLAG_BOLD     = 16;
-const FLAG_PUNCT    = 32;
-const FLAG_ROT      = 64;
+const FLAG_PUNCT    = 16;
+const FLAG_ROT      = 32;
+const FLAG_KAKKO_OPEN = 64;
+const FLAG_KAKKO_CLOSE = 128;
 const PUNCT_SET = new Set<string>(['、', '。', '，', '．', ',', '.']);
-const ROTATE_SET = new Set<string>(['ー', '−', '—', '―', '–', '～', '〜', '…', '‥']);
+const ROTATE_SET = new Set<string>(['ー', '−', '—', '―', '–', '～', '〜', '…', '‥', '（', '）', '(', ')']);
+const KAKKO_OPEN_SET = new Set<string>(['「', '『']);
+const KAKKO_CLOSE_SET = new Set<string>(['」', '』']);
+const VERTICAL_GLYPH_MAP: Record<string, string> = {
+  '。': '︒',
+  '、': '︑',
+  '，': '︐',
+  '．': '︒',
+  '.': '︒',
+  ',': '︐',
+  '「': '﹁',
+  '」': '﹂',
+  '『': '﹃',
+  '』': '﹄',
+  '（': '︵',
+  '）': '︶',
+  '(': '︵',
+  ')': '︶',
+};
 let prevCellStates: CellState[][] = [];
 let renderRAF = 0;
+let saveStatusTimer: number | null = null;
 
 // ===== Cached computation =====
 let cachedText = '';
@@ -176,123 +216,112 @@ function getUnitsAndFlow(): { units: Unit[]; flow: FlowResult } {
   return { units: cachedUnits, flow: cachedFlow };
 }
 
-// ===== Bold Ranges =====
-function mergeBoldRanges(ranges: BoldRange[]): BoldRange[] {
-  if (ranges.length === 0) return [];
-  const sorted = ranges.filter(r => r[1] > r[0]).sort((a, b) => a[0] - b[0]);
-  if (sorted.length === 0) return [];
-  const out: BoldRange[] = [[sorted[0][0], sorted[0][1]]];
-  for (let i = 1; i < sorted.length; i++) {
-    const last = out[out.length - 1];
-    if (sorted[i][0] <= last[1]) {
-      if (sorted[i][1] > last[1]) last[1] = sorted[i][1];
-    } else {
-      out.push([sorted[i][0], sorted[i][1]]);
-    }
+function shiftSettingStep(steps: number[], current: number, delta: number): number {
+  const currentIndex = steps.indexOf(current);
+  const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = Math.max(0, Math.min(steps.length - 1, baseIndex + delta));
+  return steps[nextIndex];
+}
+
+function updateInlineControlState() {
+  if (!fontSizeValueEl || !fontWeightValueEl) return;
+  fontSizeValueEl.textContent = `${Math.round(appSettings.fontScale * 100)}%`;
+  fontWeightValueEl.textContent = String(appSettings.baseFontWeight);
+  gridSolidBtnEl.classList.toggle('active', appSettings.gridStyle === 'solid');
+  gridDashedBtnEl.classList.toggle('active', appSettings.gridStyle === 'dashed');
+}
+
+function persistDisplaySettings() {
+  localStorage.setItem('user_settings', JSON.stringify(appSettings));
+}
+
+function applyDisplaySettings() {
+  applySettings(appSettings);
+  updateInlineControlState();
+  recalcSize();
+  render();
+}
+
+function stepFontScale(delta: number) {
+  appSettings.fontScale = shiftSettingStep(FONT_SCALE_STEPS, appSettings.fontScale, delta);
+  persistDisplaySettings();
+  applyDisplaySettings();
+}
+
+function stepFontWeight(delta: number) {
+  appSettings.baseFontWeight = shiftSettingStep(FONT_WEIGHT_STEPS, appSettings.baseFontWeight, delta);
+  persistDisplaySettings();
+  applyDisplaySettings();
+}
+
+function setGridStyle(style: 'solid' | 'dashed') {
+  if (appSettings.gridStyle === style) return;
+  appSettings.gridStyle = style;
+  persistDisplaySettings();
+  applyDisplaySettings();
+}
+
+function bindInlineControl(buttonId: string, handler: () => void) {
+  const button = document.getElementById(buttonId)!;
+  button.addEventListener('mousedown', (e) => { e.preventDefault(); });
+  button.addEventListener('click', () => {
+    handler();
+    textarea.focus();
+  });
+}
+
+function appendCharContent(cell: HTMLElement, text: string, flags: number) {
+  cell.textContent = '';
+  const needsSlot = !!(flags & (FLAG_PUNCT | FLAG_KAKKO_OPEN | FLAG_KAKKO_CLOSE));
+  const displayText = VERTICAL_GLYPH_MAP[text] ?? text;
+  const target = needsSlot ? document.createElement('span') : cell;
+  if (needsSlot) {
+    const slotClasses = ['glyph-slot'];
+    if (flags & FLAG_PUNCT) slotClasses.push('glyph-slot-punct');
+    if (flags & FLAG_KAKKO_OPEN) slotClasses.push('glyph-slot-kakko-open');
+    if (flags & FLAG_KAKKO_CLOSE) slotClasses.push('glyph-slot-kakko-close');
+    target.className = slotClasses.join(' ');
   }
-  return out;
+  const span = document.createElement('span');
+  const classes = ['glyph'];
+  if (flags & FLAG_ROT) classes.push('rot');
+  span.className = classes.join(' ');
+  span.textContent = displayText;
+  target.appendChild(span);
+  if (needsSlot) cell.appendChild(target);
 }
 
-function isPosBold(pos: number): boolean {
-  for (const [s, e] of boldRanges) {
-    if (pos < s) return false;
-    if (pos < e) return true;
+function getPreviewTcyScalePercent(): number {
+  const input = document.getElementById('setting-tcy-scale') as HTMLInputElement | null;
+  return input ? parseInt(input.value, 10) || Math.round(appSettings.tcyScale * 100) : Math.round(appSettings.tcyScale * 100);
+}
+
+function updateSettingsPreview() {
+  const valueEl = document.getElementById('setting-tcy-scale-value');
+  const glyphEl = document.getElementById('settings-preview-glyph') as HTMLElement | null;
+  const previewCellEl = document.getElementById('settings-preview-cell') as HTMLElement | null;
+  const charBtn = document.getElementById('settings-preview-char');
+  const tcyBtn = document.getElementById('settings-preview-tcy');
+  const cursorPositions: AppSettings['cursorPosition'][] = ['top', 'bottom', 'left', 'right'];
+  if (!valueEl || !glyphEl || !charBtn || !tcyBtn || !previewCellEl) return;
+
+  const tcyPercent = getPreviewTcyScalePercent();
+  valueEl.textContent = `${tcyPercent}%`;
+  charBtn.classList.toggle('active', settingsPreviewMode === 'char');
+  tcyBtn.classList.toggle('active', settingsPreviewMode === 'tcy');
+  for (const position of cursorPositions) {
+    document.getElementById(`setting-cursor-${position}`)?.classList.toggle('active', settingsCursorPreviewPosition === position);
   }
-  return false;
-}
 
-function isRangeFullyBold(start: number, end: number): boolean {
-  if (start >= end) return false;
-  let cursor = start;
-  for (const [s, e] of boldRanges) {
-    if (e <= cursor) continue;
-    if (s > cursor) return false;
-    cursor = e;
-    if (cursor >= end) return true;
-  }
-  return cursor >= end;
-}
+  const cellSize = 56;
+  const fontSize = Math.round(cellSize * appSettings.fontScale);
+  const tcySize = Math.min(Math.floor(cellSize * 0.9), Math.round(fontSize * (tcyPercent / 100)));
 
-function diffAdjustBoldRanges(oldText: string, newText: string) {
-  if (oldText === newText) return;
-  const oLen = oldText.length, nLen = newText.length;
-  let pre = 0;
-  const minLen = Math.min(oLen, nLen);
-  while (pre < minLen && oldText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
-  let oEnd = oLen, nEnd = nLen;
-  while (oEnd > pre && nEnd > pre && oldText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
-    oEnd--; nEnd--;
-  }
-  const delta = nEnd - oEnd;
-  const next: BoldRange[] = [];
-  for (const [s, e] of boldRanges) {
-    if (e <= pre) { next.push([s, e]); continue; }
-    if (s >= oEnd) { next.push([s + delta, e + delta]); continue; }
-    const leftE = Math.min(e, pre);
-    if (leftE > s) next.push([s, leftE]);
-    const rightS = Math.max(s, oEnd);
-    if (e > rightS) next.push([rightS + delta, e + delta]);
-  }
-  boldRanges = mergeBoldRanges(next);
-}
-
-function addBoldRange(start: number, end: number) {
-  if (end <= start) return;
-  boldRanges = mergeBoldRanges([...boldRanges, [start, end]]);
-}
-
-function removeBoldRange(start: number, end: number) {
-  if (end <= start) return;
-  const next: BoldRange[] = [];
-  for (const [s, e] of boldRanges) {
-    if (e <= start || s >= end) { next.push([s, e]); continue; }
-    if (s < start) next.push([s, start]);
-    if (e > end) next.push([end, e]);
-  }
-  boldRanges = next;
-}
-
-function toggleBoldSelection() {
-  const start = Math.min(anchorPos, activePos);
-  const end = Math.max(anchorPos, activePos);
-  if (start >= end) {
-    // No selection: toggle bold typing mode
-    isBoldMode = !isBoldMode;
-    updateBoldButtonState();
-    scheduleRender();
-    return;
-  }
-  if (isRangeFullyBold(start, end)) removeBoldRange(start, end);
-  else addBoldRange(start, end);
-  markDirty();
-  updateBoldButtonState();
-  scheduleRender();
-}
-
-function updateBoldButtonState() {
-  if (!boldBtnEl) return;
-  const start = Math.min(anchorPos, activePos);
-  const end = Math.max(anchorPos, activePos);
-  let active: boolean;
-  if (start === end) {
-    // No selection: show bold mode state, or if cursor is on bold text
-    active = isBoldMode || isPosBold(start);
-  } else {
-    active = isRangeFullyBold(start, end);
-  }
-  boldBtnEl.classList.toggle('active', active);
-  boldBtnEl.classList.toggle('bold-mode-on', isBoldMode);
-}
-
-function boldRangesForSave(): number[][] {
-  return boldRanges.map(r => [r[0], r[1]]);
-}
-
-function loadBoldFromEntry(entry: FileEntry) {
-  const raw = entry.bold_ranges;
-  if (!raw || !Array.isArray(raw)) boldRanges = [];
-  else boldRanges = mergeBoldRanges(raw.map(r => [r[0], r[1]] as BoldRange));
-  prevRawText = entry.body;
+  glyphEl.textContent = settingsPreviewMode === 'tcy' ? '99' : '縦';
+  glyphEl.style.fontWeight = String(appSettings.baseFontWeight);
+  glyphEl.style.fontSize = `${settingsPreviewMode === 'tcy' ? tcySize : fontSize}px`;
+  glyphEl.style.letterSpacing = settingsPreviewMode === 'tcy' ? '-0.5px' : '0';
+  previewCellEl.dataset.cursorPosition = settingsCursorPreviewPosition;
 }
 
 // ===== Custom Dialogs =====
@@ -527,7 +556,6 @@ async function openFile(id: string) {
   currentTitle = f.title;
   currentCustomTitle = f.custom_title;
   textarea.value = f.body;
-  loadBoldFromEntry(f);
   isDirty = false;
   invalidateCache();
   resetCursor();
@@ -576,7 +604,7 @@ function showEditor() {
 
 async function saveCurrentFile() {
   if (!currentFileId) return;
-  const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+  const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
   currentTitle = entry.title;
   currentCustomTitle = entry.custom_title;
   isDirty = false;
@@ -599,7 +627,7 @@ async function renameCurrentFile() {
 async function exportCurrentFile() {
   if (!currentFileId) return;
   if (isDirty) {
-    const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+    const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
     currentTitle = entry.title;
     isDirty = false;
   }
@@ -623,7 +651,7 @@ function scheduleAutoSave() {
   autoSaveTimer = window.setTimeout(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -636,6 +664,10 @@ function scheduleAutoSave() {
 
 function showSaveStatus(state: 'saving' | 'saved' | 'idle') {
   if (!saveStatusEl) return;
+  if (saveStatusTimer) {
+    clearTimeout(saveStatusTimer);
+    saveStatusTimer = null;
+  }
   saveStatusEl.classList.remove('saving', 'saved');
   if (state === 'saving') {
     saveStatusEl.textContent = '保存中…';
@@ -643,11 +675,19 @@ function showSaveStatus(state: 'saving' | 'saved' | 'idle') {
   } else if (state === 'saved') {
     saveStatusEl.textContent = '保存済';
     saveStatusEl.classList.add('saved');
-    setTimeout(() => {
+    saveStatusTimer = window.setTimeout(() => {
       if (!isDirty) {
         saveStatusEl.classList.remove('saved');
       }
     }, 2000);
+  } else {
+    updateSaveStatus();
+  }
+}
+
+function clearSavedStatusOnInput() {
+  if (saveStatusEl.classList.contains('saved')) {
+    showSaveStatus('idle');
   }
 }
 
@@ -658,7 +698,7 @@ function markDirty() {
 
 async function backToList() {
   if (currentFileId && isDirty) {
-    await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+    await invoke('save_file', { id: currentFileId, body: textarea.value });
   }
   currentFileId = null;
   hidePreview();
@@ -680,8 +720,10 @@ function recalcSize() {
   const cellFromW = (availW - totalCols - 1 - overflowGap) / totalCols;
   const cellFromH = (availH - ROWS - 1) / ROWS;
   const cellSize = Math.max(14, Math.min(52, Math.floor(Math.min(cellFromW, cellFromH))));
-  const fontSize = Math.max(7, Math.round(cellSize * 0.55));
-  const tcySize = Math.max(5, Math.round(fontSize * 0.63));
+  const fontSize = Math.max(7, Math.round(cellSize * appSettings.fontScale));
+  const boostedTcy = Math.round(fontSize * appSettings.tcyScale);
+  const maxTcy = Math.floor(cellSize * 0.9);
+  const tcySize = Math.max(6, Math.min(maxTcy, boostedTcy));
   document.documentElement.style.setProperty('--cell', cellSize + 'px');
   document.documentElement.style.setProperty('--fs', fontSize + 'px');
   document.documentElement.style.setProperty('--tcy', tcySize + 'px');
@@ -930,9 +972,10 @@ function render() {
         if (isComposing && compStart >= 0 && compEnd > compStart && u.rawStart >= compStart && u.rawStart + u.rawLen <= compEnd) flags |= FLAG_COMPOSING;
         if (r === colStart && u.type === 'char' && kinsokuHeadSet.has(u.text)) flags |= FLAG_KINSOKU;
         if (r === colEnd - 1 && u.type === 'char' && kinsokuTailSet.has(u.text)) flags |= FLAG_KINSOKU;
-        if (u.type !== 'newline' && isPosBold(u.rawStart)) flags |= FLAG_BOLD;
         if (u.type === 'char' && PUNCT_SET.has(u.text)) flags |= FLAG_PUNCT;
         if (u.type === 'char' && ROTATE_SET.has(u.text)) flags |= FLAG_ROT;
+        if (u.type === 'char' && KAKKO_OPEN_SET.has(u.text)) flags |= FLAG_KAKKO_OPEN;
+        if (u.type === 'char' && KAKKO_CLOSE_SET.has(u.text)) flags |= FLAG_KAKKO_CLOSE;
       }
 
       // Newline marker
@@ -958,11 +1001,8 @@ function render() {
         const span = document.createElement('span');
         span.className = 'tcy'; span.textContent = newText;
         cell.appendChild(span);
-      } else if (newType === 'char' && (flags & FLAG_ROT)) {
-        cell.textContent = '';
-        const span = document.createElement('span');
-        span.className = 'rot'; span.textContent = newText;
-        cell.appendChild(span);
+      } else if (newType === 'char') {
+        appendCharContent(cell, newText, flags);
       } else if (newType === 'nl-mark') {
         // May have char content + newline mark overlay
         if (ui !== null && units[ui]) {
@@ -972,6 +1012,8 @@ function render() {
             const span = document.createElement('span');
             span.className = 'tcy'; span.textContent = u.text;
             cell.appendChild(span);
+          } else if (u.type === 'char') {
+            appendCharContent(cell, u.text, flags);
           } else {
             cell.textContent = u.text;
           }
@@ -990,8 +1032,9 @@ function render() {
       cell.classList.toggle('composing', !!(flags & FLAG_COMPOSING));
       cell.classList.toggle('selected', !!(flags & FLAG_SELECTED));
       cell.classList.toggle('kinsoku', !!(flags & FLAG_KINSOKU));
-      cell.classList.toggle('bold', !!(flags & FLAG_BOLD));
       cell.classList.toggle('punct', !!(flags & FLAG_PUNCT));
+      cell.classList.toggle('kakko-open', !!(flags & FLAG_KAKKO_OPEN));
+      cell.classList.toggle('kakko-close', !!(flags & FLAG_KAKKO_CLOSE));
     }
   }
 
@@ -1003,7 +1046,6 @@ function render() {
 
   // IME変換中はtextarea位置を更新しない（compositionstartで固定済み）
   // 変換中に位置を動かすとIMEがリセットされ候補が消える
-  updateBoldButtonState();
 
   if (!isComposing && cells[gridCursor.col]?.[gridCursor.row]) {
     const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
@@ -1042,6 +1084,27 @@ function resetCursor() {
   syncFromRaw();
 }
 
+function positionCompositionInput() {
+  if (!cells[compCellCol]?.[compCellRow]) return;
+  const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
+  const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
+  const inputWidth = 220;
+  const inputHeight = rect.height * 2;
+  const nearTop = toolbarRect ? rect.top < toolbarRect.bottom + rect.height * 3 : false;
+
+  if (nearTop && toolbarRect) {
+    textarea.style.left = '24px';
+    textarea.style.top = (toolbarRect.bottom + 12) + 'px';
+  } else {
+    const maxLeft = Math.max(24, window.innerWidth - inputWidth - 24);
+    textarea.style.left = Math.min(maxLeft, rect.right + 8) + 'px';
+    textarea.style.top = rect.top + 'px';
+  }
+
+  textarea.style.width = inputWidth + 'px';
+  textarea.style.height = inputHeight + 'px';
+}
+
 // ============================================================
 //  INIT
 // ============================================================
@@ -1055,7 +1118,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   editorTitleEl = document.getElementById('editor-title')!;
   saveStatusEl = document.getElementById('save-status')!;
   fmFileInput = document.getElementById('fm-file-input') as HTMLInputElement;
-  boldBtnEl = document.getElementById('btn-bold');
+  fontSizeValueEl = document.getElementById('font-size-value')!;
+  fontWeightValueEl = document.getElementById('font-weight-value')!;
+  gridSolidBtnEl = document.getElementById('btn-grid-solid') as HTMLButtonElement;
+  gridDashedBtnEl = document.getElementById('btn-grid-dashed') as HTMLButtonElement;
 
   // Preview panel
   previewPanel = document.getElementById('preview-panel')!;
@@ -1089,52 +1155,26 @@ window.addEventListener('DOMContentLoaded', async () => {
     togglePreview(title);
   });
   document.getElementById('btn-history')!.addEventListener('click', openHistory);
-  document.getElementById('btn-bold')!.addEventListener('mousedown', (e) => { e.preventDefault(); });
-  document.getElementById('btn-bold')!.addEventListener('click', () => {
-    toggleBoldSelection();
-    textarea.focus();
-  });
-  document.getElementById('chk-grid')!.addEventListener('change', (e) => {
-    gridEl.classList.toggle('no-gridlines', !(e.target as HTMLInputElement).checked);
-  });
+  bindInlineControl('btn-font-smaller', () => stepFontScale(-1));
+  bindInlineControl('btn-font-larger', () => stepFontScale(1));
+  bindInlineControl('btn-weight-lighter', () => stepFontWeight(-1));
+  bindInlineControl('btn-weight-heavier', () => stepFontWeight(1));
+  bindInlineControl('btn-grid-solid', () => setGridStyle('solid'));
+  bindInlineControl('btn-grid-dashed', () => setGridStyle('dashed'));
+  updateInlineControlState();
 
   // IME composition
   textarea.addEventListener('compositionstart', () => {
     isComposing = true;
-    preCompositionText = textarea.value;
+    clearSavedStatusOnInput();
     compStart = textarea.selectionStart;
     compSuffixLen = textarea.value.length - textarea.selectionEnd;
     compCellCol = gridCursor.col;
     compCellRow = gridCursor.row;
-    // IME候補ウィンドウ用: 変換開始セルの右側にtextareaを一度だけ配置
-    // 幅を広くしてテキスト折り返しを防ぎ、キャレットのずれを抑制
-    if (cells[compCellCol]?.[compCellRow]) {
-      const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
-      textarea.style.left = (rect.right + 2) + 'px';
-      textarea.style.top = rect.top + 'px';
-      textarea.style.width = '200px';
-      textarea.style.height = (rect.height * 2) + 'px';
-    }
+    positionCompositionInput();
   });
   textarea.addEventListener('input', () => {
-    const oldText = prevRawText;
-    const newText = textarea.value;
-    diffAdjustBoldRanges(oldText, newText);
-    // If bold mode is on, mark newly inserted characters as bold
-    if (isBoldMode && !isComposing && newText.length > oldText.length) {
-      const oLen = oldText.length, nLen = newText.length;
-      let pre = 0;
-      const minLen = Math.min(oLen, nLen);
-      while (pre < minLen && oldText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
-      let oEnd = oLen, nEnd = nLen;
-      while (oEnd > pre && nEnd > pre && oldText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
-        oEnd--; nEnd--;
-      }
-      if (nEnd > pre) {
-        addBoldRange(pre, nEnd);
-      }
-    }
-    prevRawText = newText;
+    clearSavedStatusOnInput();
     invalidateCache();
     if (!isComposing) {
       anchorPos = activePos = textarea.selectionStart;
@@ -1142,32 +1182,11 @@ window.addEventListener('DOMContentLoaded', async () => {
       markDirty();
       updateTitleDisplay();
       markPreviewDirty();
-      updateBoldButtonState();
     }
     render();
   });
   textarea.addEventListener('compositionend', () => {
-    const oldText = prevRawText;
-    const newText = textarea.value;
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
-    diffAdjustBoldRanges(oldText, newText);
-    // If bold mode is on, mark the composed (IME) text as bold
-    // Use preCompositionText (captured at compositionstart) as the baseline,
-    // since prevRawText gets updated during composition by input events
-    if (isBoldMode && newText.length > preCompositionText.length) {
-      const oLen = preCompositionText.length, nLen = newText.length;
-      let pre = 0;
-      const minLen = Math.min(oLen, nLen);
-      while (pre < minLen && preCompositionText.charCodeAt(pre) === newText.charCodeAt(pre)) pre++;
-      let oEnd = oLen, nEnd = nLen;
-      while (oEnd > pre && nEnd > pre && preCompositionText.charCodeAt(oEnd - 1) === newText.charCodeAt(nEnd - 1)) {
-        oEnd--; nEnd--;
-      }
-      if (nEnd > pre) {
-        addBoldRange(pre, nEnd);
-      }
-    }
-    prevRawText = newText;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     syncFromRaw();
@@ -1175,7 +1194,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     updateTitleDisplay();
     markPreviewDirty();
     flushPreview();
-    updateBoldButtonState();
     render();
   });
 
@@ -1224,10 +1242,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     case 's':
       if (ctrl) { e.preventDefault(); saveCurrentFile(); return; }
       break;
-    case 'b':
-    case 'B':
-      if (ctrl) { e.preventDefault(); toggleBoldSelection(); return; }
-      break;
     }
   });
 
@@ -1275,7 +1289,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('blur', async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -1289,7 +1303,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   setInterval(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
       currentTitle = entry.title;
       currentCustomTitle = entry.custom_title;
       isDirty = false;
@@ -1320,7 +1334,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     textarea.value = entry.body;
     currentTitle = entry.title;
     currentCustomTitle = entry.custom_title;
-    loadBoldFromEntry(entry);
     isDirty = false;
     invalidateCache();
     resetCursor();
@@ -1345,7 +1358,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!currentFileId) return;
     // Save before showing history
     if (isDirty) {
-      await invoke('save_file', { id: currentFileId, body: textarea.value, boldRanges: boldRangesForSave() });
+      await invoke('save_file', { id: currentFileId, body: textarea.value });
       isDirty = false;
       updateSaveStatus();
     }
@@ -1401,19 +1414,54 @@ window.addEventListener('DOMContentLoaded', async () => {
   const inputSettingHead = document.getElementById('setting-kinsoku-head') as HTMLInputElement;
   const inputSettingTail = document.getElementById('setting-kinsoku-tail') as HTMLInputElement;
   const inputSettingColor = document.getElementById('setting-kinsoku-color') as HTMLInputElement;
+  const inputSettingTcyScale = document.getElementById('setting-tcy-scale') as HTMLInputElement;
+  const previewCharBtn = document.getElementById('settings-preview-char')!;
+  const previewTcyBtn = document.getElementById('settings-preview-tcy')!;
+  const cursorTopBtn = document.getElementById('setting-cursor-top')!;
+  const cursorBottomBtn = document.getElementById('setting-cursor-bottom')!;
+  const cursorLeftBtn = document.getElementById('setting-cursor-left')!;
+  const cursorRightBtn = document.getElementById('setting-cursor-right')!;
 
   btnSettings.addEventListener('click', openSettings);
   btnSettingsClose.addEventListener('click', closeSettings);
   settingsOverlay.addEventListener('click', (e) => {
     if (e.target === settingsOverlay) closeSettings();
   });
+  inputSettingTcyScale.addEventListener('input', updateSettingsPreview);
+  previewCharBtn.addEventListener('click', () => {
+    settingsPreviewMode = 'char';
+    updateSettingsPreview();
+  });
+  previewTcyBtn.addEventListener('click', () => {
+    settingsPreviewMode = 'tcy';
+    updateSettingsPreview();
+  });
+  cursorTopBtn.addEventListener('click', () => {
+    settingsCursorPreviewPosition = 'top';
+    updateSettingsPreview();
+  });
+  cursorBottomBtn.addEventListener('click', () => {
+    settingsCursorPreviewPosition = 'bottom';
+    updateSettingsPreview();
+  });
+  cursorLeftBtn.addEventListener('click', () => {
+    settingsCursorPreviewPosition = 'left';
+    updateSettingsPreview();
+  });
+  cursorRightBtn.addEventListener('click', () => {
+    settingsCursorPreviewPosition = 'right';
+    updateSettingsPreview();
+  });
   btnSettingsSave.addEventListener('click', () => {
     appSettings.kinsokuHead = inputSettingHead.value;
     appSettings.kinsokuTail = inputSettingTail.value;
     appSettings.kinsokuColorHex = inputSettingColor.value;
+    appSettings.tcyScale = (parseInt(inputSettingTcyScale.value, 10) || 104) / 100;
+    appSettings.cursorPosition = settingsCursorPreviewPosition;
 
-    localStorage.setItem('user_settings', JSON.stringify(appSettings));
+    persistDisplaySettings();
     applySettings(appSettings);
+    updateInlineControlState();
     
     // Refresh the view
     invalidateCache();
@@ -1429,6 +1477,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     inputSettingHead.value = appSettings.kinsokuHead;
     inputSettingTail.value = appSettings.kinsokuTail;
     inputSettingColor.value = appSettings.kinsokuColorHex;
+    inputSettingTcyScale.value = String(Math.round(appSettings.tcyScale * 100));
+    settingsCursorPreviewPosition = appSettings.cursorPosition;
+    settingsPreviewMode = 'tcy';
+    updateSettingsPreview();
     settingsOverlay.style.display = 'flex';
   }
 

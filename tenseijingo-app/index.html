@@ -47,24 +47,43 @@
 <!-- エディタ画面 -->
 <div id="editor-screen" style="display:none;">
   <div id="toolbar">
-    <div class="tb-left">
-      <button id="btn-back" title="ファイル一覧に戻る">◁ 一覧</button>
+    <div class="toolbar-main">
+      <div class="tb-left">
+        <button id="btn-back" title="ファイル一覧に戻る">◁ 一覧</button>
+      </div>
+      <div class="tb-center">
+        <span id="editor-title">無題</span>
+        <span id="save-status"></span>
+      </div>
+      <div class="tb-right">
+        <button id="btn-save" title="Ctrl+S / ⌘S">保存</button>
+        <button id="btn-rename">名前変更</button>
+        <button id="btn-export">書出</button>
+        <button id="btn-preview">プレビュー</button>
+        <button id="btn-history">履歴</button>
+        <button id="btn-settings" title="設定" style="cursor:pointer; border:none; background:transparent; font-size:15px; padding:0 4px; vertical-align:middle;">⚙️</button>
+      </div>
     </div>
-    <div class="tb-center">
-      <span id="editor-title">無題</span>
-      <span id="save-status"></span>
-    </div>
-    <div class="tb-right">
-      <button id="btn-save" title="Ctrl+S / ⌘S">保存</button>
-      <button id="btn-rename">名前変更</button>
-      <button id="btn-export">書出</button>
-      <button id="btn-preview">プレビュー</button>
-      <button id="btn-history">履歴</button>
-      <button id="btn-settings" title="設定" style="cursor:pointer; border:none; background:transparent; font-size:15px; padding:0 4px; vertical-align:middle;">⚙️</button>
+    <div class="toolbar-inline" aria-label="表示調整">
+      <div class="inline-group">
+        <span class="inline-label">文字サイズ</span>
+        <button id="btn-font-smaller" class="tb-inline-btn" title="文字サイズを下げる">A-</button>
+        <span id="font-size-value" class="inline-value">100%</span>
+        <button id="btn-font-larger" class="tb-inline-btn" title="文字サイズを上げる">A+</button>
+      </div>
       <span class="tb-divider"></span>
-      <button id="btn-bold" class="tb-format" title="太字 (Ctrl+B)"><b>B</b></button>
+      <div class="inline-group">
+        <span class="inline-label">文字太さ</span>
+        <button id="btn-weight-lighter" class="tb-inline-btn" title="文字を細くする">-</button>
+        <span id="font-weight-value" class="inline-value">500</span>
+        <button id="btn-weight-heavier" class="tb-inline-btn" title="文字を太くする">+</button>
+      </div>
       <span class="tb-divider"></span>
-      <label class="tb-check"><input type="checkbox" id="chk-grid" checked> 罫線</label>
+      <div class="inline-group">
+        <span class="inline-label">罫線</span>
+        <button id="btn-grid-solid" class="tb-inline-btn" title="実線">実線</button>
+        <button id="btn-grid-dashed" class="tb-inline-btn" title="点線">点線</button>
+      </div>
     </div>
   </div>
 
@@ -148,6 +167,36 @@
         <label class="setting-label">禁則マスの強調色</label>
         <div style="display:flex; align-items:center; gap:8px;">
           <input type="color" id="setting-kinsoku-color">
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label" for="setting-tcy-scale">連数字の大きさ補正</label>
+        <div class="setting-inline-row">
+          <input type="range" id="setting-tcy-scale" min="96" max="110" step="1">
+          <span id="setting-tcy-scale-value" class="setting-inline-value">104%</span>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">カーソル位置</label>
+        <div class="settings-preview-switch">
+          <button type="button" id="setting-cursor-top" class="settings-preview-btn active">上</button>
+          <button type="button" id="setting-cursor-bottom" class="settings-preview-btn">下</button>
+          <button type="button" id="setting-cursor-left" class="settings-preview-btn">左</button>
+          <button type="button" id="setting-cursor-right" class="settings-preview-btn">右</button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label class="setting-label">表示プレビュー</label>
+        <div class="settings-preview-panel">
+          <div class="settings-preview-switch">
+            <button type="button" id="settings-preview-char" class="settings-preview-btn active">通常文字</button>
+            <button type="button" id="settings-preview-tcy" class="settings-preview-btn">99</button>
+          </div>
+          <div class="settings-preview-stage">
+            <div id="settings-preview-cell" class="settings-preview-cell">
+              <span id="settings-preview-glyph" class="settings-preview-glyph">縦</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

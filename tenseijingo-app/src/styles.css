@@ -1,4 +1,12 @@
-:root { --cell: 34px; --fs: 19px; --tcy: 12px; --kinsoku-bg: rgba(210, 70, 70, 0.35); }
+:root {
+  --cell: 34px;
+  --fs: 19px;
+  --tcy: 12px;
+  --kinsoku-bg: rgba(210, 70, 70, 0.35);
+  --base-weight: 500;
+  --grid-color: rgba(168, 173, 182, 0.55);
+  --grid-style: solid;
+}
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -138,9 +146,26 @@ body {
   width: 100%; height: 100vh; display: flex; flex-direction: column;
 }
 #toolbar {
-  padding: 0 12px; background: #fff; border-bottom: 1px solid #d8dbe0;
+  padding: 0; background: #fff; border-bottom: 1px solid #d8dbe0;
+  width: 100%; display: flex; flex-direction: column;
+  flex-shrink: 0; z-index: 10;
+}
+.toolbar-main {
+  padding: 0 12px;
   width: 100%; display: flex; align-items: center;
-  height: 40px; flex-shrink: 0; z-index: 10;
+  min-height: 40px;
+}
+.toolbar-inline {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 12px 8px;
+  border-top: 1px solid #eef1f4;
+  background: linear-gradient(180deg, #ffffff 0%, #fafbfd 100%);
+  flex-wrap: wrap;
 }
 .tb-left { display: flex; align-items: center; }
 .tb-center {
@@ -173,10 +198,32 @@ body {
 }
 
 .tb-divider { width: 1px; height: 18px; background: #e0e3e8; margin: 0 2px; }
-.tb-check {
-  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
-  font-size: 11px; color: #888; cursor: pointer;
+.inline-group {
   display: flex; align-items: center; gap: 3px;
+}
+.inline-label {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; color: #7a818c;
+  margin-right: 4px;
+}
+.inline-value {
+  min-width: 40px;
+  text-align: center;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px;
+  color: #334;
+  font-variant-numeric: tabular-nums;
+}
+#toolbar button.tb-inline-btn {
+  padding: 3px 9px;
+  min-width: 28px;
+  font-size: 11px;
+  border-radius: 999px;
+}
+#toolbar button.tb-inline-btn.active {
+  background: #e8edf5;
+  border-color: #4a7fd4;
+  color: #2c3e50;
 }
 
 /* ===== Grid ===== */
@@ -186,9 +233,11 @@ body {
 }
 #grid {
   display: inline-flex; flex-direction: row-reverse;
-  gap: 1px; background-color: #c8ccd2; padding: 1px; line-height: 1;
+  gap: 0; background: transparent; padding: 0; line-height: 1;
+  border-top: 1px var(--grid-style) var(--grid-color);
+  border-left: 1px var(--grid-style) var(--grid-color);
 }
-.column { display: flex; flex-direction: column; gap: 1px; }
+.column { display: flex; flex-direction: column; gap: 0; }
 .column.overflow-sep {
   margin-right: 5px; border-right: 2px dashed #a0a4aa; padding-right: 1px;
 }
@@ -196,46 +245,72 @@ body {
   width: var(--cell); height: var(--cell); background: #fff;
   display: flex; align-items: center; justify-content: center;
   font-size: var(--fs); cursor: text; position: relative;
+  font-weight: var(--base-weight);
+  border-right: 1px var(--grid-style) var(--grid-color);
+  border-bottom: 1px var(--grid-style) var(--grid-color);
 }
 .cell.indent, .cell.tail-empty { background: #f4f5f7; }
 .cell.cursor-cell { background: #e8edf5; }
 .cell.cursor-cell::after {
-  content: ''; position: absolute; top: 8%; bottom: 8%;
-  left: 50%; width: 1.5px; transform: translateX(-50%);
+  content: ''; position: absolute;
   background: #3b6fd4; animation: blink 1s step-end infinite;
+}
+:root[data-cursor-position='top'] .cell.cursor-cell::after {
+  left: 10%; right: 10%; top: 2px; height: 2px;
+}
+:root[data-cursor-position='bottom'] .cell.cursor-cell::after {
+  left: 10%; right: 10%; bottom: 2px; height: 2px;
+}
+:root[data-cursor-position='left'] .cell.cursor-cell::after {
+  top: 10%; bottom: 10%; left: 2px; width: 2px;
+}
+:root[data-cursor-position='right'] .cell.cursor-cell::after {
+  top: 10%; bottom: 10%; right: 2px; width: 2px;
 }
 @keyframes blink { 50% { opacity: 0; } }
 .cell.selected { background: #b3d4fc; }
 .cell.kinsoku { background: var(--kinsoku-bg); }
-.cell.bold { font-weight: 900; }
-.cell.bold .tcy { font-weight: 900; }
-.cell.punct {
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: 0 1px 0 0;
+.cell .glyph {
+  display: inline-block;
+  line-height: 1;
 }
-.cell .rot {
+.cell .glyph.rot {
   display: inline-block;
   transform: rotate(90deg);
   transform-origin: center;
-  line-height: 1;
 }
-
-#toolbar button.tb-format {
-  font-family: "游明朝","Yu Mincho","MS 明朝",serif;
-  font-size: 13px; min-width: 26px; padding: 4px 8px;
-  position: relative;
-  transition: all 0.2s;
+.cell .glyph-slot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
 }
-#toolbar button.tb-format.active {
-  background: #e8edf5; border-color: #4a7fd4; color: #2c3e50;
+.cell .glyph-slot-punct {
+  justify-content: flex-end;
+  align-items: flex-start;
+  padding: 4px 4px 0 0;
 }
-#toolbar button.tb-format.bold-mode-on {
-  background: #4a7fd4; border-color: #3b6fc4; color: #fff;
-  box-shadow: 0 0 8px rgba(74, 127, 212, 0.4);
+.cell .glyph-slot-kakko-open {
+  justify-content: flex-start;
+  align-items: flex-end;
+  padding: 0 0 4px 4px;
 }
-#toolbar button.tb-format.bold-mode-on:hover {
-  background: #3b6fc4; border-color: #2c5fb4;
+.cell .glyph-slot-kakko-close {
+  justify-content: flex-end;
+  align-items: flex-start;
+  padding: 4px 4px 0 0;
+}
+.cell .glyph-slot-punct .glyph,
+.cell .glyph-slot-kakko-close .glyph {
+  transform: translate(4%, -2%);
+}
+.cell .glyph-slot-kakko-open .glyph {
+  transform: translate(-3%, 3%);
+}
+.cell .glyph-slot-punct .glyph.rot,
+.cell .glyph-slot-kakko-close .glyph.rot,
+.cell .glyph-slot-kakko-open .glyph.rot {
+  transform-origin: center;
 }
 
 .cell.composing::after {
@@ -245,13 +320,9 @@ body {
   top: auto; width: auto; transform: none;
 }
 .cell .tcy {
-  font-size: var(--tcy); letter-spacing: -1px; white-space: nowrap; line-height: 1;
+  font-size: var(--tcy); letter-spacing: -0.5px; white-space: nowrap; line-height: 1;
 }
 .cell .newline-mark { color: #c0c4cc; font-size: 70%; pointer-events: none; }
-
-#grid.no-gridlines { gap: 0; padding: 0; background: transparent; }
-#grid.no-gridlines .column { gap: 0; }
-#grid.no-gridlines .column.overflow-sep { margin-right: 0; border-right: none; padding-right: 0; }
 
 /* ===== Status Bar ===== */
 #status-bar {
@@ -395,6 +466,83 @@ body {
 .setting-controls label {
   font-size: 13px; color: #333; cursor: pointer;
 }
+.setting-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.setting-inline-row input[type="range"] {
+  flex: 1;
+}
+.setting-inline-value {
+  min-width: 44px;
+  text-align: right;
+  font-size: 12px;
+  color: #55606f;
+  font-variant-numeric: tabular-nums;
+}
+.settings-preview-panel {
+  border: 1px solid #e2e5ea;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fcfcfd 0%, #f6f8fb 100%);
+  padding: 12px;
+}
+.settings-preview-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.settings-preview-btn {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px;
+  padding: 5px 10px;
+  border: 1px solid #d0d3d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+.settings-preview-btn.active {
+  background: #e8edf5;
+  border-color: #4a7fd4;
+  color: #2c3e50;
+}
+.settings-preview-stage {
+  display: flex;
+  justify-content: center;
+}
+.settings-preview-cell {
+  width: 56px;
+  height: 56px;
+  border: 1px solid #cfd5dd;
+  background: #fff;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-preview-cell::after {
+  content: '';
+  position: absolute;
+  background: #3b6fd4;
+}
+.settings-preview-cell[data-cursor-position='top']::after {
+  left: 10%; right: 10%; top: 2px; height: 2px;
+}
+.settings-preview-cell[data-cursor-position='bottom']::after {
+  left: 10%; right: 10%; bottom: 2px; height: 2px;
+}
+.settings-preview-cell[data-cursor-position='left']::after {
+  top: 10%; bottom: 10%; left: 2px; width: 2px;
+}
+.settings-preview-cell[data-cursor-position='right']::after {
+  top: 10%; bottom: 10%; right: 2px; width: 2px;
+}
+.settings-preview-glyph {
+  display: inline-block;
+  line-height: 1;
+  font-family: "游明朝","Yu Mincho","YuMincho","ヒラギノ明朝 ProN","Hiragino Mincho ProN","MS 明朝","MS Mincho",serif;
+}
 #settings-footer {
   padding: 12px 18px; border-top: 1px solid #e2e5ea;
   text-align: right; background: #fafbfc;
@@ -537,4 +685,3 @@ body {
   background: #fff;
   -webkit-user-select: text; user-select: text;
 }
-
