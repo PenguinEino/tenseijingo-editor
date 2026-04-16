@@ -1,7 +1,7 @@
-# Tauri + Vanilla TS
+# 天声人語エディタ
 
-This template should help get you started developing with Tauri in vanilla HTML, CSS and Typescript.
+縦書き原稿用紙ベースの天声人語エディタです。Tauri + Vanilla TypeScript + Rust で構成されています。
 
-## Recommended IDE Setup
+仕様とテスト運用は以下を参照してください。
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- [アプリ仕様とテスト運用](docs/app-spec-and-testing.md)
