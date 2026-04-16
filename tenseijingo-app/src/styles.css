@@ -81,7 +81,7 @@ body {
 #fm-datadir-label { flex-shrink: 0; }
 #fm-datadir-path {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  min-width: 0; flex: 1; direction: rtl; text-align: left;
+  min-width: 0; flex: 1; direction: ltr; text-align: left; unicode-bidi: plaintext;
 }
 #fm-datadir-change {
   flex-shrink: 0; font-size: 11px; padding: 2px 8px;
@@ -374,6 +374,149 @@ body {
 #modal-ok { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
 #modal-ok:hover { background: #3b6fc4; }
 
+/* ===== Save Directory Dialog ===== */
+#data-dir-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.34);
+  z-index: 3100; display: flex; align-items: center; justify-content: center;
+}
+#data-dir-box {
+  width: min(720px, 92vw);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 56px rgba(0,0,0,0.18);
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  overflow: hidden;
+}
+#data-dir-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid #e4e7ec;
+}
+#data-dir-title {
+  font-size: 16px; font-weight: 700; color: #2c3e50;
+}
+#data-dir-close {
+  border: none; background: transparent; color: #96a0ab;
+  font-size: 16px; padding: 4px 8px; border-radius: 6px; cursor: pointer;
+}
+#data-dir-close:hover { background: #f1f4f8; color: #51606f; }
+#data-dir-body {
+  padding: 18px 20px 16px;
+}
+#data-dir-lead {
+  font-size: 13px; color: #55606d; line-height: 1.7; margin-bottom: 14px;
+}
+.data-dir-path-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.data-dir-path-card {
+  display: flex; flex-direction: column; gap: 6px;
+  background: #f7f9fc;
+  border: 1px solid #e3e7ee;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.data-dir-path-label {
+  font-size: 11px; color: #7c8794; font-weight: 600;
+}
+.data-dir-path-value {
+  font-size: 12px; color: #334155; line-height: 1.6;
+  word-break: break-all;
+}
+#data-dir-summary {
+  margin-top: 14px;
+  color: #55606d;
+  font-size: 12px;
+  line-height: 1.7;
+}
+#data-dir-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.data-dir-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff8e8;
+  border: 1px solid #f0deab;
+  color: #72591b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+#data-dir-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.data-dir-option {
+  border: 1px solid #d9dee6;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 15px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.data-dir-option:hover {
+  border-color: #b8c7dd;
+  background: #f8fbff;
+  box-shadow: 0 6px 18px rgba(74,127,212,0.08);
+}
+.data-dir-option.selected {
+  border-color: #4a7fd4;
+  background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+  box-shadow: 0 8px 20px rgba(74,127,212,0.12);
+}
+.data-dir-option:focus-visible {
+  outline: 2px solid #4a7fd4;
+  outline-offset: 2px;
+}
+.data-dir-option-title {
+  font-size: 13px; font-weight: 700; color: #2c3e50;
+}
+.data-dir-option-desc {
+  font-size: 11px; color: #64748b; line-height: 1.7;
+}
+#data-dir-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 0 20px 18px;
+}
+#data-dir-footer button {
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 12px; padding: 7px 16px; border: 1px solid #d0d3d8;
+  border-radius: 6px; background: #fff; cursor: pointer; color: #555;
+}
+#data-dir-footer button:hover { background: #f5f6f8; }
+#data-dir-confirm {
+  background: #4a7fd4 !important;
+  border-color: #4a7fd4 !important;
+  color: #fff !important;
+}
+#data-dir-confirm:hover {
+  background: #3b6bba !important;
+}
+#data-dir-confirm:disabled {
+  background: #d7dbe2 !important;
+  border-color: #d7dbe2 !important;
+  color: #fff !important;
+  cursor: not-allowed;
+}
+#data-dir-confirm:disabled:hover {
+  background: #d7dbe2 !important;
+}
+@media (max-width: 760px) {
+  #data-dir-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ===== Editor Body (grid + preview side-by-side) ===== */
 #editor-body {
   flex: 1 1 auto; display: flex; overflow: hidden; width: 100%;
@@ -566,6 +709,12 @@ body {
 }
 #save-status.saved {
   color: #5aad5a;
+}
+#save-status.pending {
+  color: #c57b38;
+}
+#save-status.error {
+  color: #d24646;
 }
 @keyframes save-pulse {
   0%, 100% { opacity: 1; }

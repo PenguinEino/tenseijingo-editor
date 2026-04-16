@@ -28,6 +28,26 @@ interface GitLogEntry {
   timestamp: string;
   char_count: number;
 }
+interface DataDirInspection {
+  file_count: number;
+  overlapping_count: number;
+}
+type HistoryStatus = 'committed' | 'recovered' | 'pending';
+interface FileSaveResult {
+  entry: FileEntry;
+  history_status: HistoryStatus;
+}
+interface CreateFileResult {
+  id: string;
+  history_status: HistoryStatus;
+}
+interface HistoryActionResult {
+  history_status: HistoryStatus;
+}
+interface HistoryRecoveryResult {
+  recovered: boolean;
+}
+type DataDirSwitchAction = 'migrate' | 'switch-only';
 
 // ===== Settings & Config =====
 interface AppSettings {
@@ -217,6 +237,8 @@ const VERTICAL_GLYPH_MAP: Record<string, string> = {
 let prevCellStates: CellState[][] = [];
 let renderRAF = 0;
 let saveStatusTimer: number | null = null;
+let historyPending = false;
+let activeNotification: { dismiss: () => void; dismissOnInput: boolean } | null = null;
 
 // ===== Cached computation =====
 let cachedText = '';
@@ -379,17 +401,139 @@ async function customConfirm(message: string): Promise<boolean> {
   return (await showModal(message, false)) !== null;
 }
 
+function showDataDirSwitchDialog(currentDir: string, nextDir: string, targetInfo: DataDirInspection): Promise<DataDirSwitchAction | null> {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('data-dir-overlay')!;
+    const currentEl = document.getElementById('data-dir-current')!;
+    const nextEl = document.getElementById('data-dir-next')!;
+    const summaryEl = document.getElementById('data-dir-summary')!;
+    const warningsEl = document.getElementById('data-dir-warnings')!;
+    const migrateBtn = document.getElementById('data-dir-migrate') as HTMLButtonElement;
+    const switchOnlyBtn = document.getElementById('data-dir-switch-only') as HTMLButtonElement;
+    const confirmBtn = document.getElementById('data-dir-confirm') as HTMLButtonElement;
+    const cancelBtn = document.getElementById('data-dir-cancel')!;
+    const closeBtn = document.getElementById('data-dir-close')!;
+    const actionButtons: Record<DataDirSwitchAction, HTMLButtonElement> = {
+      migrate: migrateBtn,
+      'switch-only': switchOnlyBtn,
+    };
+    let selectedAction: DataDirSwitchAction = 'switch-only';
+
+    currentEl.textContent = currentDir;
+    nextEl.textContent = nextDir;
+
+    function renderNotice() {
+      summaryEl.textContent = '';
+
+      const warnings: string[] = [];
+      if (selectedAction === 'switch-only' && targetInfo.file_count === 0) {
+        warnings.push('切り替え後の原稿一覧は空になります。');
+      }
+      if (selectedAction === 'migrate' && targetInfo.overlapping_count > 0) {
+        warnings.push(`重複する ${targetInfo.overlapping_count} 件は切替先の内容を優先します。`);
+      }
+
+      warningsEl.replaceChildren(...warnings.map((message) => {
+        const warning = document.createElement('div');
+        warning.className = 'data-dir-warning';
+        warning.textContent = message;
+        return warning;
+      }));
+    }
+
+    function renderSelection() {
+      (Object.entries(actionButtons) as [DataDirSwitchAction, HTMLButtonElement][]).forEach(([action, button]) => {
+        const isSelected = selectedAction === action;
+        button.classList.toggle('selected', isSelected);
+        button.setAttribute('aria-pressed', String(isSelected));
+      });
+      renderNotice();
+      confirmBtn.disabled = false;
+    }
+
+    renderSelection();
+    overlay.style.display = 'flex';
+
+    function cleanup(result: DataDirSwitchAction | null) {
+      overlay.style.display = 'none';
+      migrateBtn.removeEventListener('click', onChooseMigrate);
+      switchOnlyBtn.removeEventListener('click', onChooseSwitchOnly);
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+      closeBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onBg);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+    function selectAction(action: DataDirSwitchAction) {
+      if (selectedAction === action) return;
+      selectedAction = action;
+      renderSelection();
+    }
+    function onChooseMigrate() { selectAction('migrate'); }
+    function onChooseSwitchOnly() { selectAction('switch-only'); }
+    function onConfirm() {
+      cleanup(selectedAction);
+    }
+    function onCancel() { cleanup(null); }
+    function onBg(e: MouseEvent) { if (e.target === overlay) onCancel(); }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter' && selectedAction) onConfirm();
+    }
+
+    migrateBtn.addEventListener('click', onChooseMigrate);
+    switchOnlyBtn.addEventListener('click', onChooseSwitchOnly);
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    closeBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onBg);
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+function normalizeDirPath(path: string): string {
+  const normalized = path.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  return /^[a-z]:/i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
 // ===== Notification =====
-function showNotification(msg: string) {
+function showNotification(msg: string, options: { dismissOnInput?: boolean } = {}) {
   const el = document.createElement('div');
   el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);'
     + 'background:rgba(30,30,30,0.85);color:#fff;padding:10px 24px;border-radius:8px;'
     + 'font-size:13px;font-family:"游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;'
     + 'z-index:3000;pointer-events:none;transition:opacity 0.3s;';
   el.textContent = msg;
+  activeNotification?.dismiss();
   document.body.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; }, 1200);
-  setTimeout(() => { document.body.removeChild(el); }, 1600);
+  let closed = false;
+  let fadeTimer = window.setTimeout(() => { el.style.opacity = '0'; }, 1200);
+  let removeTimer = window.setTimeout(() => {
+    if (el.parentNode) document.body.removeChild(el);
+    if (activeNotification?.dismiss === dismiss) activeNotification = null;
+  }, 1600);
+  function dismiss() {
+    if (closed) return;
+    closed = true;
+    window.clearTimeout(fadeTimer);
+    window.clearTimeout(removeTimer);
+    el.style.opacity = '0';
+    removeTimer = window.setTimeout(() => {
+      if (el.parentNode) document.body.removeChild(el);
+      if (activeNotification?.dismiss === dismiss) activeNotification = null;
+    }, 300);
+  }
+  activeNotification = {
+    dismiss,
+    dismissOnInput: options.dismissOnInput ?? false,
+  };
+}
+
+function dismissInputNotification() {
+  if (activeNotification?.dismissOnInput) {
+    activeNotification.dismiss();
+  }
 }
 
 // ===== Preview Side Panel =====
@@ -558,8 +702,9 @@ function escHtml(s: string) {
 }
 
 async function createNewFile() {
-  const id: string = await invoke('create_file');
-  openFile(id);
+  const created: CreateFileResult = await invoke('create_file');
+  handleHistoryStatus(created.history_status, 'create');
+  openFile(created.id);
 }
 
 async function openFileWithPreview(id: string) {
@@ -582,7 +727,8 @@ async function openFile(id: string) {
 
 async function deleteFile(id: string, title: string) {
   if (!(await customConfirm(`「${title}」を削除しますか？`))) return;
-  await invoke('delete_file', { id });
+  const result: HistoryActionResult = await invoke('delete_file', { id });
+  handleHistoryStatus(result.history_status, 'delete');
   showNotification('削除しました');
   refreshFileList();
 }
@@ -600,8 +746,10 @@ async function exportFileFromList(f: FileEntry) {
 
 async function importFile(file: File) {
   const text = await file.text();
-  const id: string = await invoke('create_file');
-  await invoke('save_file', { id, body: text });
+  const created: CreateFileResult = await invoke('create_file');
+  handleHistoryStatus(created.history_status, 'create');
+  const result = await persistFile(created.id, text, { mode: 'manual' });
+  if (!result) return;
   showNotification('読み込みました');
   refreshFileList();
 }
@@ -622,20 +770,17 @@ function showEditor() {
 
 async function saveCurrentFile() {
   if (!currentFileId) return;
-  const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
-  currentTitle = entry.title;
-  currentCustomTitle = entry.custom_title;
-  isDirty = false;
-  updateTitleDisplay();
-  updateSaveStatus();
-  showNotification('保存しました');
+  const result = await persistFile(currentFileId, textarea.value, { mode: 'manual' });
+  if (!result) return;
+  if (result.history_status === 'committed') showNotification('保存しました', { dismissOnInput: true });
 }
 
 async function renameCurrentFile() {
   if (!currentFileId) return;
   const newTitle = await customPrompt('新しいタイトル:', currentTitle);
   if (newTitle === null || newTitle === currentTitle) return;
-  await invoke('rename_file', { id: currentFileId, title: newTitle });
+  const result: HistoryActionResult = await invoke('rename_file', { id: currentFileId, title: newTitle });
+  handleHistoryStatus(result.history_status, 'rename');
   currentTitle = newTitle;
   currentCustomTitle = true;
   updateTitleDisplay();
@@ -645,9 +790,8 @@ async function renameCurrentFile() {
 async function exportCurrentFile() {
   if (!currentFileId) return;
   if (isDirty) {
-    const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
-    currentTitle = entry.title;
-    isDirty = false;
+    const result = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+    if (!result) return;
   }
   const path = await save({
     defaultPath: `${currentTitle}.txt`,
@@ -660,6 +804,13 @@ async function exportCurrentFile() {
 }
 
 function updateSaveStatus() {
+  saveStatusEl.classList.remove('pending');
+  if (historyPending) {
+    saveStatusEl.textContent = '履歴未反映';
+    saveStatusEl.style.color = '#c57b38';
+    saveStatusEl.classList.add('pending');
+    return;
+  }
   saveStatusEl.textContent = isDirty ? '未保存' : '保存済';
   saveStatusEl.style.color = isDirty ? '#d48a4a' : '#aaa';
 }
@@ -669,35 +820,33 @@ function scheduleAutoSave() {
   autoSaveTimer = window.setTimeout(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
-      currentTitle = entry.title;
-      currentCustomTitle = entry.custom_title;
-      isDirty = false;
-      updateTitleDisplay();
-      updateSaveStatus();
-      showSaveStatus('saved');
+      const entry = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+      if (entry) showSaveStatus('saved');
     }
   }, 1000);
 }
 
-function showSaveStatus(state: 'saving' | 'saved' | 'idle') {
+function showSaveStatus(state: 'saving' | 'saved' | 'idle' | 'error') {
   if (!saveStatusEl) return;
   if (saveStatusTimer) {
     clearTimeout(saveStatusTimer);
     saveStatusTimer = null;
   }
-  saveStatusEl.classList.remove('saving', 'saved');
+  saveStatusEl.classList.remove('saving', 'saved', 'error');
   if (state === 'saving') {
     saveStatusEl.textContent = '保存中…';
     saveStatusEl.classList.add('saving');
   } else if (state === 'saved') {
-    saveStatusEl.textContent = '保存済';
+    updateSaveStatus();
     saveStatusEl.classList.add('saved');
     saveStatusTimer = window.setTimeout(() => {
-      if (!isDirty) {
+      if (!isDirty && !historyPending) {
         saveStatusEl.classList.remove('saved');
       }
     }, 2000);
+  } else if (state === 'error') {
+    saveStatusEl.textContent = '保存失敗';
+    saveStatusEl.classList.add('error');
   } else {
     updateSaveStatus();
   }
@@ -714,9 +863,52 @@ function markDirty() {
   scheduleAutoSave();
 }
 
+function handleHistoryStatus(status: HistoryStatus, source: 'save' | 'create' | 'rename' | 'delete' | 'restore' | 'startup' | 'background') {
+  const wasPending = historyPending;
+  historyPending = status === 'pending';
+  updateSaveStatus();
+  if (status === 'recovered') {
+    showNotification(source === 'startup' ? '未反映の履歴を自動回復しました' : '履歴を自動回復しました');
+    return;
+  }
+  if (status === 'pending' && (!wasPending || source === 'save' || source === 'create' || source === 'rename' || source === 'restore')) {
+    showNotification('原稿は保存しました。履歴は次回起動時に自動回復します');
+  }
+}
+
+function applySavedEntry(entry: FileEntry) {
+  currentTitle = entry.title;
+  currentCustomTitle = entry.custom_title;
+  isDirty = false;
+  updateTitleDisplay();
+  updateSaveStatus();
+}
+
+async function persistFile(
+  id: string,
+  body: string,
+  options: { mode: 'manual' | 'background' },
+): Promise<FileSaveResult | null> {
+  try {
+    const result: FileSaveResult = await invoke('save_file', { id, body });
+    applySavedEntry(result.entry);
+    handleHistoryStatus(result.history_status, options.mode === 'manual' ? 'save' : 'background');
+    return result;
+  } catch (error) {
+    showSaveStatus('error');
+    if (options.mode === 'manual') {
+      await showModal(`保存に失敗しました: ${String(error)}`, false);
+    } else {
+      showNotification('保存に失敗しました');
+    }
+    return null;
+  }
+}
+
 async function backToList() {
   if (currentFileId && isDirty) {
-    await invoke('save_file', { id: currentFileId, body: textarea.value });
+    const result = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+    if (!result) return;
   }
   currentFileId = null;
   hidePreview();
@@ -1185,6 +1377,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // IME composition
   textarea.addEventListener('compositionstart', () => {
+    dismissInputNotification();
     isComposing = true;
     clearSavedStatusOnInput();
     compStart = textarea.selectionStart;
@@ -1194,6 +1387,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     positionCompositionInput();
   });
   textarea.addEventListener('input', () => {
+    dismissInputNotification();
     clearSavedStatusOnInput();
     invalidateCache();
     if (!isComposing) {
@@ -1206,6 +1400,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     render();
   });
   textarea.addEventListener('compositionend', () => {
+    dismissInputNotification();
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
@@ -1309,13 +1504,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('blur', async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
-      currentTitle = entry.title;
-      currentCustomTitle = entry.custom_title;
-      isDirty = false;
-      updateTitleDisplay();
-      updateSaveStatus();
-      showSaveStatus('saved');
+      const result = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+      if (result) showSaveStatus('saved');
     }
   });
 
@@ -1323,13 +1513,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   setInterval(async () => {
     if (currentFileId && isDirty) {
       showSaveStatus('saving');
-      const entry: FileEntry = await invoke('save_file', { id: currentFileId, body: textarea.value });
-      currentTitle = entry.title;
-      currentCustomTitle = entry.custom_title;
-      isDirty = false;
-      updateTitleDisplay();
-      updateSaveStatus();
-      showSaveStatus('saved');
+      const result = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+      if (result) showSaveStatus('saved');
     }
   }, 30000);
 
@@ -1350,10 +1535,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('history-restore')!.addEventListener('click', async () => {
     if (!currentFileId || !historySelectedHash) return;
     if (!(await customConfirm('この版に復元しますか？'))) return;
-    const entry: FileEntry = await invoke('git_restore', { id: currentFileId, commitHash: historySelectedHash });
-    textarea.value = entry.body;
-    currentTitle = entry.title;
-    currentCustomTitle = entry.custom_title;
+    const result: FileSaveResult = await invoke('git_restore', { id: currentFileId, commitHash: historySelectedHash });
+    handleHistoryStatus(result.history_status, 'restore');
+    textarea.value = result.entry.body;
+    currentTitle = result.entry.title;
+    currentCustomTitle = result.entry.custom_title;
     isDirty = false;
     invalidateCache();
     resetCursor();
@@ -1378,9 +1564,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!currentFileId) return;
     // Save before showing history
     if (isDirty) {
-      await invoke('save_file', { id: currentFileId, body: textarea.value });
-      isDirty = false;
-      updateSaveStatus();
+      const result = await persistFile(currentFileId, textarea.value, { mode: 'background' });
+      if (!result) return;
     }
     historyOverlay.style.display = 'flex';
     historyListWrapper.style.display = 'block';
@@ -1535,6 +1720,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   async function updateDataDirDisplay() {
     const dir: string = await invoke('get_data_dir');
     fmDatadirPath.textContent = dir;
+    fmDatadirPath.setAttribute('title', dir);
   }
 
   async function chooseFolder(): Promise<string | null> {
@@ -1543,19 +1729,35 @@ window.addEventListener('DOMContentLoaded', async () => {
     return null;
   }
 
+  async function recoverHistoryOnLaunch() {
+    try {
+      const result: HistoryRecoveryResult = await invoke('recover_history');
+      if (result.recovered) {
+        handleHistoryStatus('recovered', 'startup');
+      }
+    } catch {
+      // Keep the app usable even if recovery check itself fails.
+    }
+  }
+
   document.getElementById('fm-datadir-change')!.addEventListener('click', async () => {
     const dir = await chooseFolder();
     if (!dir) return;
     const currentDir: string = await invoke('get_data_dir');
-    if (dir === currentDir) return;
-    const migrateExisting = await customConfirm(`保存先を変更します。\n\n${dir}\n\n既存の原稿も新しい保存先に引き継ぎますか？`);
-    if (!migrateExisting) {
-      if (!(await customConfirm(`既存の原稿は現在の保存先に残したまま、新しい保存先へ切り替えますか？\n\n${dir}`))) return;
+    if (normalizeDirPath(dir) === normalizeDirPath(currentDir)) return;
+    const targetInfo: DataDirInspection = await invoke('inspect_data_dir', { path: dir, currentPath: currentDir });
+    const action = await showDataDirSwitchDialog(currentDir, dir, targetInfo);
+    if (!action) return;
+    const migrateExisting = action === 'migrate';
+    try {
+      await invoke('switch_data_dir', { path: dir, migrateExisting });
+      await recoverHistoryOnLaunch();
+      await updateDataDirDisplay();
+      await refreshFileList();
+      showNotification(migrateExisting ? '保存先を変更して原稿を引き継ぎました' : '保存先を変更しました');
+    } catch (error) {
+      await showModal(`保存先の切り替えに失敗しました: ${String(error)}`, false);
     }
-    await invoke('switch_data_dir', { path: dir, migrateExisting });
-    await updateDataDirDisplay();
-    refreshFileList();
-    showNotification(migrateExisting ? '保存先を変更して原稿を引き継ぎました' : '保存先を変更しました');
   });
 
   // ===== Setup Screen (first launch) =====
@@ -1571,6 +1773,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('setup-default')!.addEventListener('click', async () => {
       await invoke('set_default_data_dir');
       setupScreen.style.display = 'none';
+      await recoverHistoryOnLaunch();
       await updateDataDirDisplay();
       showFileManager();
     });
@@ -1580,10 +1783,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (!dir) return;
       await invoke('set_data_dir', { path: dir });
       setupScreen.style.display = 'none';
+      await recoverHistoryOnLaunch();
       await updateDataDirDisplay();
       showFileManager();
     });
   } else {
+    await recoverHistoryOnLaunch();
     await updateDataDirDisplay();
     showFileManager();
   }

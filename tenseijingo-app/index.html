@@ -122,6 +122,44 @@
   </div>
 </div>
 
+<div id="data-dir-overlay" style="display:none;">
+  <div id="data-dir-box">
+    <div id="data-dir-header">
+      <span id="data-dir-title">保存先を変更</span>
+      <button id="data-dir-close">✕</button>
+    </div>
+    <div id="data-dir-body">
+      <p id="data-dir-lead">切替先と原稿の扱いを選んでください。</p>
+      <div class="data-dir-path-group">
+        <div class="data-dir-path-card">
+          <span class="data-dir-path-label">現在の保存先</span>
+          <span id="data-dir-current" class="data-dir-path-value"></span>
+        </div>
+        <div class="data-dir-path-card">
+          <span class="data-dir-path-label">新しい保存先</span>
+          <span id="data-dir-next" class="data-dir-path-value"></span>
+        </div>
+      </div>
+      <div id="data-dir-summary"></div>
+      <div id="data-dir-warnings"></div>
+      <div id="data-dir-actions">
+        <button id="data-dir-migrate" class="data-dir-option" type="button" aria-pressed="false">
+          <span class="data-dir-option-title">原稿も引き継いで切り替える</span>
+          <span class="data-dir-option-desc">今の保存先の原稿を新しい保存先へコピーしてから切り替えます。</span>
+        </button>
+        <button id="data-dir-switch-only" class="data-dir-option" type="button" aria-pressed="false">
+          <span class="data-dir-option-title">保存先だけ切り替える</span>
+          <span class="data-dir-option-desc">新しい保存先にある原稿をそのまま使います。今の原稿は元の保存先に残ります。</span>
+        </button>
+      </div>
+    </div>
+    <div id="data-dir-footer">
+      <button id="data-dir-cancel" type="button">キャンセル</button>
+      <button id="data-dir-confirm" class="primary-btn" type="button" disabled>この内容で切り替える</button>
+    </div>
+  </div>
+</div>
+
 <!-- 履歴モーダル -->
 <div id="history-overlay" style="display:none;">
   <div id="history-box">

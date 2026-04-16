@@ -92,7 +92,10 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
               char_count: 0,
               custom_title: false,
             });
-            return id;
+            return {
+              id,
+              history_status: 'committed',
+            };
           }
           case 'save_file': {
             const id = String(args.id);
@@ -107,11 +110,21 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
               updated_at: '2026-04-16T10:01:00',
             };
             fileMap.set(id, next);
-            return next;
+            return {
+              entry: next,
+              history_status: 'committed',
+            };
           }
+          case 'recover_history':
+            return { recovered: false };
           case 'switch_data_dir':
             currentDataDir = String(args.path);
             return null;
+          case 'inspect_data_dir':
+            return {
+              file_count: String(args.path).includes('existing') ? 1 : 0,
+              overlapping_count: String(args.path).includes('existing') ? 1 : 0,
+            };
           case 'set_data_dir':
             currentDataDir = String(args.path);
             return null;
@@ -136,9 +149,13 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
           case 'git_show':
             return '「テスト」。';
           case 'git_restore':
-            return fileMap.get('file-1');
+            return {
+              entry: fileMap.get('file-1'),
+              history_status: 'committed',
+            };
           case 'rename_file':
           case 'delete_file':
+            return { history_status: 'committed' };
           case 'export_file_to':
             return null;
           default:
@@ -223,12 +240,15 @@ test('captures settings preview appearance', async ({ page }) => {
 
 test('captures save directory confirmation modal', async ({ page }) => {
   await bootstrap(page, {
-    dialogSelections: ['D:/tenseijingo-project/manuscripts'],
+    dialogSelections: ['D:/tenseijingo-project/existing-manuscripts'],
   });
   await expect(page.locator('#file-manager')).toBeVisible();
   await page.locator('#fm-datadir-change').click();
-  await expect(page.locator('#modal-overlay')).toBeVisible();
-  await expect(page.locator('#modal-box')).toHaveScreenshot('save-dir-confirm.png');
+  await expect(page.locator('#data-dir-overlay')).toBeVisible();
+  await expect(page.locator('#data-dir-confirm')).toBeEnabled();
+  await expect(page.locator('#data-dir-summary')).toBeEmpty();
+  await expect(page.locator('#data-dir-warnings')).toBeEmpty();
+  await expect(page.locator('#data-dir-box')).toHaveScreenshot('save-dir-confirm.png');
 });
 
 test('clears saved status immediately on new input', async ({ page }) => {
@@ -241,14 +261,27 @@ test('clears saved status immediately on new input', async ({ page }) => {
   await expect(page.locator('#save-status')).toContainText('未保存');
 });
 
+test('dismisses manual save notification immediately on next input', async ({ page }) => {
+  await bootstrap(page);
+  await openEditor(page);
+  await page.locator('#btn-save').click();
+  await expect(page.getByText('保存しました')).toBeVisible();
+  await page.keyboard.type('あ');
+  await expect(page.getByText('保存しました')).toBeHidden();
+});
+
 test('switches save directory after confirmation and updates the label', async ({ page }) => {
   await bootstrap(page, {
     dialogSelections: ['D:/tenseijingo-project/manuscripts'],
   });
   await expect(page.locator('#file-manager')).toBeVisible();
   await page.locator('#fm-datadir-change').click();
-  await page.locator('#modal-ok').click();
-  await expect(page.locator('#modal-overlay')).toBeHidden();
+  await expect(page.locator('#data-dir-switch-only')).toHaveClass(/selected/);
+  await expect(page.locator('#data-dir-confirm')).toBeEnabled();
+  await page.locator('#data-dir-migrate').click();
+  await expect(page.locator('#data-dir-migrate')).toHaveClass(/selected/);
+  await page.locator('#data-dir-confirm').click();
+  await expect(page.locator('#data-dir-overlay')).toBeHidden();
   await expect(page.locator('#fm-datadir-path')).toHaveText('D:/tenseijingo-project/manuscripts');
   await expect(page.locator('body')).toContainText('保存先を変更して原稿を引き継ぎました');
 
@@ -263,4 +296,17 @@ test('switches save directory after confirmation and updates the label', async (
       migrateExisting: true,
     },
   });
+});
+
+test('shows only the relevant warning for migration conflicts', async ({ page }) => {
+  await bootstrap(page, {
+    dialogSelections: ['D:/tenseijingo-project/existing-manuscripts'],
+  });
+  await expect(page.locator('#file-manager')).toBeVisible();
+  await page.locator('#fm-datadir-change').click();
+  await expect(page.locator('#data-dir-warnings')).toBeEmpty();
+  await page.locator('#data-dir-migrate').click();
+  await expect(page.locator('#data-dir-summary')).toBeEmpty();
+  await expect(page.locator('.data-dir-warning')).toHaveCount(1);
+  await expect(page.locator('.data-dir-warning')).toContainText('重複する 1 件は切替先の内容を優先します。');
 });

@@ -1,8 +1,9 @@
 use chrono::Utc;
-use git2::{Oid, Repository, Signature};
+use git2::{Index, IndexAddOption, Oid, Repository, Signature, Status, StatusOptions};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
@@ -32,6 +33,42 @@ struct GitLogEntry {
     message: String,
     timestamp: String,
     char_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DataDirInspection {
+    file_count: usize,
+    overlapping_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum HistoryStatus {
+    Committed,
+    Recovered,
+    Pending,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FileSaveResult {
+    entry: FileEntry,
+    history_status: HistoryStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreateFileResult {
+    id: String,
+    history_status: HistoryStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HistoryActionResult {
+    history_status: HistoryStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HistoryRecoveryResult {
+    recovered: bool,
 }
 
 fn config_path(app: &tauri::AppHandle) -> PathBuf {
@@ -66,16 +103,20 @@ fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String>
     fs::write(&path, json).map_err(|e| e.to_string())
 }
 
-fn copy_dir_contents(from: &PathBuf, to: &PathBuf) -> Result<(), String> {
+fn copy_dir_contents_excluding_git(from: &Path, to: &Path) -> Result<(), String> {
     if !to.exists() {
         fs::create_dir_all(to).map_err(|e| e.to_string())?;
     }
     for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
         let src = entry.path();
-        let dest = to.join(entry.file_name());
+        let dest = to.join(&name);
         if src.is_dir() {
-            copy_dir_contents(&src, &dest)?;
+            copy_dir_contents_excluding_git(&src, &dest)?;
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -84,6 +125,167 @@ fn copy_dir_contents(from: &PathBuf, to: &PathBuf) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn dir_has_entries(path: &Path) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    Ok(fs::read_dir(path)
+        .map_err(|e| e.to_string())?
+        .next()
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .is_some())
+}
+
+fn canonical_or_fallback(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn paths_are_nested(a: &Path, b: &Path) -> bool {
+    let a_canon = canonical_or_fallback(a);
+    let b_canon = canonical_or_fallback(b);
+    a_canon.starts_with(&b_canon) || b_canon.starts_with(&a_canon)
+}
+
+fn stage_all_and_commit_if_needed(
+    repo: &Repository,
+    signature: &Signature<'_>,
+    message: &str,
+) -> Result<(), String> {
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    stage_all_changes(&mut index)?;
+
+    let tree_id = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
+    let head = repo.head().map_err(|e| e.to_string())?;
+    let parent = head.peel_to_commit().map_err(|e| e.to_string())?;
+    if parent.tree_id() == tree_id {
+        return Ok(());
+    }
+    repo.commit(Some("HEAD"), signature, signature, message, &tree, &[&parent])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn stage_all_changes(index: &mut Index) -> Result<(), String> {
+    index
+        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+        .map_err(|e| e.to_string())?;
+    index
+        .remove_all(["*"].iter(), None)
+        .map_err(|e| e.to_string())?;
+    index.write().map_err(|e| e.to_string())
+}
+
+fn repo_has_pending_changes(repo: &Repository) -> Result<bool, String> {
+    let mut options = StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut options)).map_err(|e| e.to_string())?;
+    Ok(statuses.iter().any(|entry| entry.status() != Status::CURRENT))
+}
+
+fn recover_history_if_needed_for_repo(repo: &Repository, message: &str) -> Result<bool, String> {
+    if !repo_has_pending_changes(repo)? {
+        return Ok(false);
+    }
+    stage_all_and_commit_if_needed(repo, &make_signature(), message)?;
+    Ok(true)
+}
+
+fn recover_history_if_needed(app: &tauri::AppHandle, message: &str) -> Result<bool, String> {
+    let repo = ensure_repo(app)?;
+    recover_history_if_needed_for_repo(&repo, message)
+}
+
+fn resolve_history_status(
+    app: &tauri::AppHandle,
+    commit_result: Result<Oid, String>,
+    recovery_message: &str,
+) -> HistoryStatus {
+    match commit_result {
+        Ok(_) => HistoryStatus::Committed,
+        Err(_) => match recover_history_if_needed(app, recovery_message) {
+            Ok(true) => HistoryStatus::Recovered,
+            Ok(false) | Err(_) => HistoryStatus::Pending,
+        },
+    }
+}
+
+fn replace_dir_atomically(target_dir: &Path, staging_dir: &Path) -> Result<(), String> {
+    let parent = target_dir
+        .parent()
+        .ok_or_else(|| "保存先の親フォルダを特定できません".to_string())?;
+    let backup_dir = parent.join(format!(
+        ".tenseijingo-migrate-backup-{}",
+        Uuid::new_v4()
+    ));
+    let target_exists = target_dir.exists();
+
+    if target_exists {
+        fs::rename(target_dir, &backup_dir).map_err(|e| e.to_string())?;
+    }
+
+    if let Err(err) = fs::rename(staging_dir, target_dir) {
+        if target_exists {
+            let _ = fs::rename(&backup_dir, target_dir);
+        }
+        return Err(err.to_string());
+    }
+
+    if target_exists {
+        fs::remove_dir_all(&backup_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn migrate_repo_with_history(current_dir: &Path, target_dir: &Path) -> Result<(), String> {
+    if paths_are_nested(current_dir, target_dir) {
+        return Err(
+            "現在の保存先と新しい保存先が親子関係にあります。安全のため、別の場所を選んでください。"
+                .to_string(),
+        );
+    }
+
+    let parent = target_dir
+        .parent()
+        .ok_or_else(|| "保存先の親フォルダを特定できません".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+    let staging_dir = parent.join(format!(".tenseijingo-migrate-staging-{}", Uuid::new_v4()));
+    let source = current_dir
+        .to_str()
+        .ok_or_else(|| "現在の保存先パスを扱えません".to_string())?;
+
+    let repo = Repository::clone(source, &staging_dir).map_err(|e| e.to_string())?;
+    if dir_has_entries(target_dir)? {
+        copy_dir_contents_excluding_git(target_dir, &staging_dir)?;
+        stage_all_and_commit_if_needed(&repo, &make_signature(), "保存先移行")?;
+    }
+
+    replace_dir_atomically(target_dir, &staging_dir)
+}
+
+fn manuscript_file_names(dir: &PathBuf) -> Result<HashSet<String>, String> {
+    if !dir.exists() {
+        return Ok(HashSet::new());
+    }
+    let mut names = HashSet::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+        {
+            names.insert(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    Ok(names)
 }
 
 fn default_data_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -268,12 +470,31 @@ fn switch_data_dir(
     let current_canon = fs::canonicalize(&current_dir).unwrap_or(current_dir.clone());
     let new_canon = fs::canonicalize(&new_dir).unwrap_or(new_dir.clone());
     if migrate_existing && current_canon != new_canon && current_dir.exists() {
-        copy_dir_contents(&current_dir, &new_dir)?;
+        ensure_repo(&app)?;
+        let current_files = manuscript_file_names(&current_dir)?;
+        let target_files = manuscript_file_names(&new_dir)?;
+        let target_has_repo = Repository::open(&new_dir).is_ok();
+        if !current_files.is_subset(&target_files) || !target_has_repo {
+            migrate_repo_with_history(&current_dir, &new_dir)?;
+        }
     }
 
     let mut config = load_config(&app);
     config.data_dir = Some(path);
     save_config(&app, &config)
+}
+
+#[tauri::command]
+fn inspect_data_dir(path: String, current_path: String) -> Result<DataDirInspection, String> {
+    let dir = PathBuf::from(path);
+    let current_dir = PathBuf::from(current_path);
+    let target_files = manuscript_file_names(&dir)?;
+    let current_files = manuscript_file_names(&current_dir)?;
+    let overlapping_count = current_files.intersection(&target_files).count();
+    Ok(DataDirInspection {
+        file_count: target_files.len(),
+        overlapping_count,
+    })
 }
 
 #[tauri::command]
@@ -309,7 +530,7 @@ fn list_files(app: tauri::AppHandle) -> Vec<FileEntry> {
 }
 
 #[tauri::command]
-fn create_file(app: tauri::AppHandle) -> String {
+fn create_file(app: tauri::AppHandle) -> Result<CreateFileResult, String> {
     let id = Uuid::new_v4().to_string();
     let entry = FileEntry {
         id: id.clone(),
@@ -323,11 +544,14 @@ fn create_file(app: tauri::AppHandle) -> String {
     let path = file_path(&app, &id);
     fs::write(&path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
 
-    // Git commit the new file
     let file_name = format!("{}.json", id);
-    let _ = git_commit_file(&app, &file_name, &format!("新規作成: {}", entry.title));
+    let history_status = resolve_history_status(
+        &app,
+        git_commit_file(&app, &file_name, &format!("新規作成: {}", entry.title)),
+        "履歴回復: 新規作成",
+    );
 
-    id
+    Ok(CreateFileResult { id, history_status })
 }
 
 #[tauri::command]
@@ -343,7 +567,7 @@ fn save_file(
     id: String,
     body: String,
     bold_ranges: Option<Vec<[usize; 2]>>,
-) -> Result<FileEntry, String> {
+) -> Result<FileSaveResult, String> {
     let path = file_path(&app, &id);
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut entry: FileEntry = serde_json::from_str(&data).map_err(|e| e.to_string())?;
@@ -359,17 +583,20 @@ fn save_file(
     let json = serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
 
-    // Git auto-commit
     let file_name = format!("{}.json", id);
     let now = Utc::now().format("%Y/%m/%d %H:%M:%S").to_string();
     let msg = format!("保存: {} ({}文字) - {}", entry.title, entry.char_count, now);
-    let _ = git_commit_file(&app, &file_name, &msg);
+    let history_status =
+        resolve_history_status(&app, git_commit_file(&app, &file_name, &msg), "履歴回復: 保存");
 
-    Ok(entry)
+    Ok(FileSaveResult {
+        entry,
+        history_status,
+    })
 }
 
 #[tauri::command]
-fn rename_file(app: tauri::AppHandle, id: String, title: String) -> Result<(), String> {
+fn rename_file(app: tauri::AppHandle, id: String, title: String) -> Result<HistoryActionResult, String> {
     let path = file_path(&app, &id);
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut entry: FileEntry = serde_json::from_str(&data).map_err(|e| e.to_string())?;
@@ -378,43 +605,48 @@ fn rename_file(app: tauri::AppHandle, id: String, title: String) -> Result<(), S
     entry.updated_at = now_iso();
     fs::write(&path, serde_json::to_string_pretty(&entry).unwrap()).map_err(|e| e.to_string())?;
 
-    // Git commit rename
     let file_name = format!("{}.json", id);
-    let _ = git_commit_file(&app, &file_name, &format!("名前変更: {}", title));
+    let history_status = resolve_history_status(
+        &app,
+        git_commit_file(&app, &file_name, &format!("名前変更: {}", title)),
+        "履歴回復: 名前変更",
+    );
 
-    Ok(())
+    Ok(HistoryActionResult { history_status })
 }
 
 #[tauri::command]
-fn delete_file(app: tauri::AppHandle, id: String) -> Result<(), String> {
+fn delete_file(app: tauri::AppHandle, id: String) -> Result<HistoryActionResult, String> {
     let path = file_path(&app, &id);
     let file_name = format!("{}.json", id);
 
     fs::remove_file(&path).map_err(|e| e.to_string())?;
 
-    // Git commit deletion
     let repo = ensure_repo(&app)?;
-    let mut index = repo.index().map_err(|e| e.to_string())?;
-    index
-        .remove_path(std::path::Path::new(&file_name))
-        .map_err(|e| e.to_string())?;
-    index.write().map_err(|e| e.to_string())?;
-    let tree_id = index.write_tree().map_err(|e| e.to_string())?;
-    let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
-    let sig = make_signature();
-    let head = repo.head().map_err(|e| e.to_string())?;
-    let parent = head.peel_to_commit().map_err(|e| e.to_string())?;
-    repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
-        &format!("削除: {}", file_name),
-        &tree,
-        &[&parent],
-    )
-    .map_err(|e| e.to_string())?;
+    let commit_result = (|| -> Result<Oid, String> {
+        let mut index = repo.index().map_err(|e| e.to_string())?;
+        index
+            .remove_path(std::path::Path::new(&file_name))
+            .map_err(|e| e.to_string())?;
+        index.write().map_err(|e| e.to_string())?;
+        let tree_id = index.write_tree().map_err(|e| e.to_string())?;
+        let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
+        let sig = make_signature();
+        let head = repo.head().map_err(|e| e.to_string())?;
+        let parent = head.peel_to_commit().map_err(|e| e.to_string())?;
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &format!("削除: {}", file_name),
+            &tree,
+            &[&parent],
+        )
+        .map_err(|e| e.to_string())
+    })();
 
-    Ok(())
+    let history_status = resolve_history_status(&app, commit_result, "履歴回復: 削除");
+    Ok(HistoryActionResult { history_status })
 }
 
 #[tauri::command]
@@ -503,6 +735,12 @@ fn git_log(app: tauri::AppHandle, id: String) -> Result<Vec<GitLogEntry>, String
 }
 
 #[tauri::command]
+fn recover_history(app: tauri::AppHandle) -> Result<HistoryRecoveryResult, String> {
+    let recovered = recover_history_if_needed(&app, "履歴回復")?;
+    Ok(HistoryRecoveryResult { recovered })
+}
+
+#[tauri::command]
 fn git_show(app: tauri::AppHandle, id: String, commit_hash: String) -> Result<String, String> {
     let repo = ensure_repo(&app)?;
     let file_name = format!("{}.json", id);
@@ -512,7 +750,7 @@ fn git_show(app: tauri::AppHandle, id: String, commit_hash: String) -> Result<St
 }
 
 #[tauri::command]
-fn git_restore(app: tauri::AppHandle, id: String, commit_hash: String) -> Result<FileEntry, String> {
+fn git_restore(app: tauri::AppHandle, id: String, commit_hash: String) -> Result<FileSaveResult, String> {
     let repo = ensure_repo(&app)?;
     let file_name = format!("{}.json", id);
 
@@ -529,15 +767,18 @@ fn git_restore(app: tauri::AppHandle, id: String, commit_hash: String) -> Result
     let json = serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
 
-    // Git commit the restore
     let short_hash = &commit_hash[..7.min(commit_hash.len())];
     let msg = format!("復元: {} ← {}", entry.title, short_hash);
-    let _ = git_commit_file(&app, &file_name, &msg);
+    let history_status =
+        resolve_history_status(&app, git_commit_file(&app, &file_name, &msg), "履歴回復: 復元");
 
-    // Re-read to return fresh entry
     drop(repo);
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
+    let entry = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    Ok(FileSaveResult {
+        entry,
+        history_status,
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -591,6 +832,7 @@ pub fn run() {
             get_default_data_dir,
             set_data_dir,
             switch_data_dir,
+            inspect_data_dir,
             set_default_data_dir,
             list_files,
             create_file,
@@ -601,6 +843,7 @@ pub fn run() {
             export_file_to,
             git_log,
             git_show,
+            recover_history,
             git_restore
         ])
         .run(tauri::generate_context!())
@@ -668,7 +911,13 @@ mod tests {
             let current_canon = fs::canonicalize(&current_dir).unwrap_or(current_dir.clone());
             let next_canon = fs::canonicalize(&path).unwrap_or(path.clone());
             if migrate_existing && current_canon != next_canon && current_dir.exists() {
-                copy_dir_contents(&current_dir, &path).unwrap();
+                self.ensure_repo();
+                let current_files = manuscript_file_names(&current_dir).unwrap();
+                let target_files = manuscript_file_names(&path).unwrap();
+                let target_has_repo = Repository::open(&path).is_ok();
+                if !current_files.is_subset(&target_files) || !target_has_repo {
+                    migrate_repo_with_history(&current_dir, &path).unwrap();
+                }
             }
             self.set_data_dir(path);
         }
@@ -870,6 +1119,11 @@ mod tests {
             self.git_commit_file(&file_name, &format!("復元: {} ← {}", entry.title, &commit_hash[..7.min(commit_hash.len())]));
             entry
         }
+
+        fn recover_history_if_needed(&self) -> bool {
+            let repo = self.ensure_repo();
+            recover_history_if_needed_for_repo(&repo, "履歴回復").unwrap()
+        }
     }
 
     impl Drop for TestStorage {
@@ -900,6 +1154,44 @@ mod tests {
     }
 
     #[test]
+    fn recover_history_commits_pending_disk_changes() {
+        let storage = TestStorage::new();
+        let id = storage.create_file();
+        storage.save_file(&id, "保存済み");
+        let path = storage.file_path(&id);
+        let mut entry = storage.read_file(&id);
+        entry.body = "未履歴の変更".into();
+        entry.updated_at = now_iso();
+        entry.char_count = count_display_chars(&entry.body);
+        fs::write(&path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+
+        let recovered = storage.recover_history_if_needed();
+
+        assert!(recovered);
+        let repo = storage.ensure_repo();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.message(), Some("履歴回復"));
+        assert_eq!(storage.read_file(&id).body, "未履歴の変更");
+    }
+
+    #[test]
+    fn switch_data_dir_migration_preserves_git_history() {
+        let storage = TestStorage::new();
+        let id = storage.create_file();
+        storage.save_file(&id, "一稿");
+        storage.save_file(&id, "二稿");
+        let source_logs = storage.git_log(&id);
+        let target = storage.root.join("history-migrated");
+
+        storage.switch_data_dir(target.clone(), true);
+
+        assert_eq!(storage.data_dir(), target);
+        let migrated_logs = storage.git_log(&id);
+        assert!(migrated_logs.len() >= source_logs.len());
+        assert!(Repository::open(storage.data_dir().join(".git").parent().unwrap()).is_ok());
+    }
+
+    #[test]
     fn switch_data_dir_without_migration_keeps_new_dir_empty() {
         let storage = TestStorage::new();
         let id = storage.create_file();
@@ -924,6 +1216,35 @@ mod tests {
 
         assert!(old_dir.join(format!("{id}.json")).exists());
         assert!(!target.join(format!("{id}.json")).exists());
+    }
+
+    #[test]
+    fn switch_data_dir_to_existing_same_manuscripts_prefers_target_contents() {
+        let storage = TestStorage::new();
+        let id = storage.create_file();
+        storage.save_file(&id, "現在側の原稿");
+        let target = storage.root.join("existing-dir");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join(format!("{id}.json")),
+            serde_json::to_string_pretty(&FileEntry {
+                id: id.clone(),
+                title: "共有原稿".into(),
+                body: "切替先の原稿".into(),
+                updated_at: now_iso(),
+                char_count: count_display_chars("切替先の原稿"),
+                custom_title: true,
+                bold_ranges: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        storage.switch_data_dir(target.clone(), true);
+
+        assert_eq!(storage.data_dir(), target);
+        assert_eq!(storage.read_file(&id).body, "切替先の原稿");
+        assert!(Repository::open(storage.data_dir()).is_ok());
     }
 
     #[test]
@@ -978,8 +1299,21 @@ mod tests {
     fn list_files_returns_newest_first() {
         let storage = TestStorage::new();
         let first = storage.create_file();
-        std::thread::sleep(std::time::Duration::from_millis(5));
         let second = storage.create_file();
+        let mut first_entry = storage.read_file(&first);
+        first_entry.updated_at = "2026-04-16T10:00:00".into();
+        fs::write(
+            storage.file_path(&first),
+            serde_json::to_string_pretty(&first_entry).unwrap(),
+        )
+        .unwrap();
+        let mut second_entry = storage.read_file(&second);
+        second_entry.updated_at = "2026-04-16T10:00:01".into();
+        fs::write(
+            storage.file_path(&second),
+            serde_json::to_string_pretty(&second_entry).unwrap(),
+        )
+        .unwrap();
 
         let files = storage.list_files();
 
