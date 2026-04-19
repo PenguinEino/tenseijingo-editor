@@ -4049,7 +4049,7 @@ dependencies = [
 
 [[package]]
 name = "tenseijingo-app"
-version = "0.1.15"
+version = "0.1.17"
 dependencies = [
  "chrono",
  "git2",

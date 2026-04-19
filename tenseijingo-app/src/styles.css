@@ -436,6 +436,16 @@ body {
   direction: ltr;
 }
 
+:root[data-platform='windows'] #hidden-input.ime-anchor-active {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  white-space: normal;
+  text-align: left;
+  direction: ltr;
+  line-height: 1;
+  font-size: 1px;
+}
+
 /* ===== Modal Dialog ===== */
 #modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.3);

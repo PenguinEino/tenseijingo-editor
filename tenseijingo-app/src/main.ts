@@ -51,6 +51,13 @@ interface HistoryRecoveryResult {
   recovered: boolean;
 }
 type DataDirSwitchAction = 'migrate' | 'switch-only';
+type RuntimePlatform = 'windows' | 'macos' | 'linux' | 'unknown';
+
+declare global {
+  interface Window {
+    __TEST_PLATFORM__?: string;
+  }
+}
 
 // ===== Settings & Config =====
 interface AppSettings {
@@ -135,6 +142,29 @@ function loadSettings() {
   applySettings(appSettings);
 }
 loadSettings();
+
+function detectRuntimePlatform(): RuntimePlatform {
+  const override = window.__TEST_PLATFORM__?.toLowerCase();
+  if (override?.includes('win')) return 'windows';
+  if (override?.includes('mac')) return 'macos';
+  if (override?.includes('linux')) return 'linux';
+
+  const navigatorWithHints = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const hints = [
+    navigatorWithHints.userAgentData?.platform?.toLowerCase(),
+    navigator.platform?.toLowerCase(),
+    navigator.userAgent?.toLowerCase(),
+  ].filter((value): value is string => !!value);
+
+  if (hints.some((value) => value.includes('win'))) return 'windows';
+  if (hints.some((value) => value.includes('mac'))) return 'macos';
+  if (hints.some((value) => value.includes('linux'))) return 'linux';
+  return 'unknown';
+}
+
+const runtimePlatform = detectRuntimePlatform();
+const isWindows = runtimePlatform === 'windows';
+document.documentElement.dataset.platform = runtimePlatform;
 
 // ===== Constants =====
 const BASE_COLS = 35;
@@ -1108,30 +1138,8 @@ function keepCursorCellInView() {
   if (!gridWrapperEl) return;
   const cell = cells[gridCursor.col]?.[gridCursor.row];
   if (!cell) return;
-  const column = cell.parentElement as HTMLElement | null;
-  if (!column) return;
-  const marginX = 28;
-  const marginY = 20;
-  const cellLeft = column.offsetLeft + cell.offsetLeft;
-  const cellTop = cell.offsetTop;
-  const cellRight = cellLeft + cell.offsetWidth;
-  const cellBottom = cellTop + cell.offsetHeight;
-  const viewLeft = gridWrapperEl.scrollLeft;
-  const viewTop = gridWrapperEl.scrollTop;
-  const viewRight = viewLeft + gridWrapperEl.clientWidth;
-  const viewBottom = viewTop + gridWrapperEl.clientHeight;
-
-  if (cellLeft < viewLeft + marginX) {
-    gridWrapperEl.scrollLeft -= (viewLeft + marginX) - cellLeft;
-  } else if (cellRight > viewRight - marginX) {
-    gridWrapperEl.scrollLeft += cellRight - (viewRight - marginX);
-  }
-
-  if (cellTop < viewTop + marginY) {
-    gridWrapperEl.scrollTop -= (viewTop + marginY) - cellTop;
-  } else if (cellBottom > viewBottom - marginY) {
-    gridWrapperEl.scrollTop += cellBottom - (viewBottom - marginY);
-  }
+  // Let the browser resolve scroll-origin differences across platforms.
+  cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function getCellViewportRect(col: number, row: number) {
@@ -1560,13 +1568,26 @@ function positionCompositionInput() {
   const rect = getCellViewportRect(compCellCol, compCellRow);
   if (!rect) return;
   const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
+  const top = Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top);
+
+  if (isWindows) {
+    const inputWidth = Math.max(Math.round(rect.width * 1.15), 36);
+    const desiredHeight = Math.max(Math.round(rect.height * 8), 180);
+    const inputHeight = Math.min(desiredHeight, Math.max(rect.height * 3, window.innerHeight - top - 24));
+    const left = Math.min(window.innerWidth - inputWidth - 24, rect.right + 10);
+    textarea.style.left = `${Math.max(12, left)}px`;
+    textarea.style.top = `${top}px`;
+    textarea.style.width = inputWidth + 'px';
+    textarea.style.height = inputHeight + 'px';
+    return;
+  }
+
   const inputWidth = 220;
   const inputHeight = rect.height * 2;
   const anchorGap = 24;
   const anchorRight = Math.min(window.innerWidth - 24, rect.right + anchorGap);
   textarea.style.left = `${anchorRight - inputWidth}px`;
-  textarea.style.top = `${Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top)}px`;
-
+  textarea.style.top = `${top}px`;
   textarea.style.width = inputWidth + 'px';
   textarea.style.height = inputHeight + 'px';
 }

@@ -13,6 +13,7 @@ type BootstrapOptions = {
   files?: MockFile[];
   firstLaunch?: boolean;
   dialogSelections?: Array<string | null>;
+  platformOverride?: 'windows' | 'macos' | 'linux';
 };
 
 const defaultFiles: MockFile[] = [
@@ -26,8 +27,15 @@ const defaultFiles: MockFile[] = [
   },
 ];
 
+const defaultTestPlatform = process.platform === 'darwin'
+  ? 'macos'
+  : process.platform === 'win32'
+    ? 'windows'
+    : 'linux';
+
 async function bootstrap(page: Page, options: BootstrapOptions = {}) {
-  await page.addInitScript(({ files, firstLaunch, dialogSelections }) => {
+  const resolvedPlatform = options.platformOverride ?? defaultTestPlatform;
+  await page.addInitScript(({ files, firstLaunch, dialogSelections, platformOverride }) => {
     const fileMap = new Map(files.map((file) => [file.id, { ...file }]));
     let currentDataDir = 'C:/Users/test/AppData/Roaming/com.penguin.tenseijingo-editor/manuscripts';
     let callbackId = 0;
@@ -43,6 +51,9 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
       tcyScale: 1.02,
       cursorPosition: 'top',
     }));
+
+    // @ts-expect-error test-only globals
+    window.__TEST_PLATFORM__ = platformOverride;
 
     // @ts-expect-error test-only globals
     window.__TEST_STATE__ = {
@@ -184,6 +195,7 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
     files: options.files ?? defaultFiles,
     firstLaunch: options.firstLaunch ?? false,
     dialogSelections: options.dialogSelections ?? [],
+    platformOverride: resolvedPlatform,
   });
 
   await page.goto('/');
@@ -197,6 +209,17 @@ async function openEditor(page: Page) {
 
 async function moveCursorToEnd(page: Page) {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End');
+}
+
+async function expectCursorVisibleInsideGrid(page: Page, margin = 4) {
+  const cursorBox = await page.locator('.cell.cursor-cell').boundingBox();
+  const wrapperBox = await page.locator('#grid-wrapper').boundingBox();
+  expect(cursorBox).not.toBeNull();
+  expect(wrapperBox).not.toBeNull();
+  expect((cursorBox?.x ?? 0)).toBeGreaterThanOrEqual((wrapperBox?.x ?? 0) + margin);
+  expect((cursorBox?.y ?? 0)).toBeGreaterThanOrEqual((wrapperBox?.y ?? 0) + margin);
+  expect((cursorBox?.x ?? 0) + (cursorBox?.width ?? 0)).toBeLessThanOrEqual((wrapperBox?.x ?? 0) + (wrapperBox?.width ?? 0) - margin);
+  expect((cursorBox?.y ?? 0) + (cursorBox?.height ?? 0)).toBeLessThanOrEqual((wrapperBox?.y ?? 0) + (wrapperBox?.height ?? 0) - margin);
 }
 
 test('captures first launch setup screen', async ({ page }) => {
@@ -514,8 +537,38 @@ test('keeps the cursor visible during IME composition', async ({ page }) => {
   await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '5');
 });
 
+test('keeps the cursor visible while extending into overflow columns on Windows', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await bootstrap(page, {
+    platformOverride: 'windows',
+    files: [{
+      id: 'file-1',
+      title: 'Windows横スクロール確認',
+      body: '',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 0,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  await page.locator('#hidden-input').evaluate((element, value) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.value = value as string;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  }, 'あ'.repeat(140));
+
+  await expect(page.locator('html')).toHaveAttribute('data-platform', 'windows');
+  await expect.poll(async () => Number(await page.locator('.cell.cursor-cell').getAttribute('data-col'))).toBeGreaterThan(8);
+  await expectCursorVisibleInsideGrid(page);
+});
+
 test('keeps the IME anchor near the active cell on upper rows', async ({ page }) => {
   await bootstrap(page, {
+    platformOverride: 'macos',
     files: [{
       id: 'file-1',
       title: 'IME上端確認',
@@ -526,6 +579,7 @@ test('keeps the IME anchor near the active cell on upper rows', async ({ page })
     }],
   });
   await openEditor(page);
+  await expect(page.locator('html')).toHaveAttribute('data-platform', 'macos');
 
   for (let i = 0; i < 5; i++) {
     await page.keyboard.press('ArrowUp');
@@ -548,6 +602,42 @@ test('keeps the IME anchor near the active cell on upper rows', async ({ page })
   expect(Math.abs(((inputBox?.x ?? 0) + (inputBox?.width ?? 0)) - ((cursorBox?.x ?? 0) + (cursorBox?.width ?? 0)))).toBeLessThanOrEqual(24);
   await expect(page.locator('#hidden-input')).toHaveClass(/ime-anchor-active/);
   await expect(page.locator('#hidden-input')).toHaveCSS('text-align', 'right');
+});
+
+test('uses a vertical IME anchor on Windows to avoid left drift during composition', async ({ page }) => {
+  await bootstrap(page, {
+    platformOverride: 'windows',
+    files: [{
+      id: 'file-1',
+      title: 'Windows IME確認',
+      body: '',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 0,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  await page.locator('#hidden-input').evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    textarea.value = 'かんじへんかん';
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  await expect(page.locator('html')).toHaveAttribute('data-platform', 'windows');
+  await expect(page.locator('#hidden-input')).toHaveClass(/ime-anchor-active/);
+  await expect(page.locator('#hidden-input')).toHaveCSS('writing-mode', 'vertical-rl');
+  await expect(page.locator('#hidden-input')).toHaveCSS('font-size', '1px');
+
+  const inputBox = await page.locator('#hidden-input').boundingBox();
+  expect(inputBox).not.toBeNull();
+  expect((inputBox?.height ?? 0)).toBeGreaterThan((inputBox?.width ?? 0) * 3);
 });
 
 test('switches save directory after confirmation and updates the label', async ({ page }) => {
