@@ -173,6 +173,7 @@ const BASE_CELL_SIZE = 34;
 const MAX_AUTO_CELL_SIZE = 56;
 const MIN_CELL_SIZE = 24;
 const MAX_CELL_SIZE = 72;
+const BASE_GRID_CHROME = BASE_COLS + 1;
 
 // Pre-compute column configs
 const COL_CFG_CACHE: ColCfg[] = [];
@@ -923,6 +924,7 @@ function showEditor() {
   updateInlineControlState();
   render();
   textarea.focus();
+  scheduleLayoutRefresh();
 }
 
 async function saveCurrentFile() {
@@ -1113,7 +1115,7 @@ function getAutoCellSize() {
   const { width, height } = getContentBoxSize(gridWrapperEl);
   if (width <= 0 || height <= 0) return BASE_CELL_SIZE;
 
-  const fitByWidth = Math.floor((width - 1) / BASE_COLS);
+  const fitByWidth = Math.floor((width - BASE_GRID_CHROME) / BASE_COLS);
   const fitByHeight = Math.floor((height - 1) / ROWS);
   // Prioritize the manuscript width and let vertical overflow scroll when needed.
   const fitted = fitByWidth > 0 ? fitByWidth : fitByHeight;
@@ -1122,9 +1124,22 @@ function getAutoCellSize() {
   return Math.max(BASE_CELL_SIZE, Math.min(MAX_AUTO_CELL_SIZE, fitted));
 }
 
+function getBaseGridPixelWidth(cellSize: number) {
+  return BASE_COLS * cellSize + BASE_GRID_CHROME;
+}
+
 function recalcSize() {
+  const { width } = getContentBoxSize(gridWrapperEl);
   const autoCellSize = getAutoCellSize();
-  const cellSize = Math.min(MAX_CELL_SIZE, Math.max(MIN_CELL_SIZE, Math.round(autoCellSize * appSettings.viewZoom)));
+  let cellSize = Math.min(MAX_CELL_SIZE, Math.max(MIN_CELL_SIZE, Math.round(autoCellSize * appSettings.viewZoom)));
+  if (width > 0) {
+    const blankWidth = width - getBaseGridPixelWidth(cellSize);
+    const targetBlank = Math.max(18, Math.round(cellSize * 1.2));
+    if (blankWidth > targetBlank) {
+      const extraCells = Math.ceil((blankWidth - targetBlank) / BASE_COLS);
+      cellSize = Math.min(MAX_CELL_SIZE, cellSize + extraCells);
+    }
+  }
   const fontSize = Math.max(7, Math.round(cellSize * appSettings.fontScale));
   const boostedTcy = Math.round(fontSize * appSettings.tcyScale);
   const maxTcy = Math.floor(cellSize * 0.9);
@@ -1170,19 +1185,18 @@ function applyTextareaRect(rect: { left: number; top: number; width: number; hei
 
 function getWindowsImeDockRect(referenceRect: ReturnType<typeof getCellViewportRect>) {
   const wrapperRect = gridWrapperEl.getBoundingClientRect();
-  const gridRect = gridEl.getBoundingClientRect();
   const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
-  const baseWidth = Math.max(20, Math.round((referenceRect?.width ?? currentCellSize) * 0.7));
+  const baseWidth = Math.max(22, Math.round((referenceRect?.width ?? currentCellSize) * 0.8));
   const desiredHeight = Math.max(Math.round((referenceRect?.height ?? currentCellSize) * 8), 180);
   const topMin = Math.max((toolbarRect?.bottom ?? 0) + 12, wrapperRect.top + 8);
   const height = Math.min(desiredHeight, Math.max((referenceRect?.height ?? currentCellSize) * 4, window.innerHeight - topMin - 24));
   const topMax = Math.max(topMin, window.innerHeight - height - 24);
   const top = clamp(referenceRect?.top ?? topMin, topMin, topMax);
-  const leftGap = Math.max(0, gridRect.left - wrapperRect.left);
-  const preferredLeft = wrapperRect.left + Math.max(12, leftGap - baseWidth - 12);
-  const leftMax = Math.max(12, window.innerWidth - baseWidth - 24);
+  const preferredLeft = (referenceRect?.left ?? (wrapperRect.left + baseWidth + 20)) - baseWidth - 14;
+  const leftMin = Math.max(12, wrapperRect.left + 8);
+  const leftMax = Math.max(leftMin, window.innerWidth - baseWidth - 24);
   return {
-    left: clamp(preferredLeft, 12, leftMax),
+    left: clamp(preferredLeft, leftMin, leftMax),
     top,
     width: baseWidth,
     height,
@@ -1842,6 +1856,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('resize', () => {
     if (editorScreenEl.style.display !== 'none') scheduleLayoutRefresh();
   });
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(() => {
+      if (editorScreenEl.style.display !== 'none') scheduleLayoutRefresh();
+    });
+    observer.observe(gridWrapperEl);
+  }
 
   // Periodic preview flush (debounced, not per-keystroke)
   setInterval(() => { if (previewDirty) flushPreview(); }, 300);

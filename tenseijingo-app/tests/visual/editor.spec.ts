@@ -399,6 +399,19 @@ test('uses more of the available width after enlarging the window on Windows', a
   await bootstrap(page, { platformOverride: 'windows' });
   await openEditor(page);
 
+  const initialLayout = await page.evaluate(() => {
+    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
+    const grid = document.getElementById('grid') as HTMLElement;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    const cell = grid.querySelector('.cell') as HTMLElement;
+    return {
+      leftGap: gridRect.left - wrapperRect.left,
+      cellWidth: cell.getBoundingClientRect().width,
+    };
+  });
+  expect(initialLayout.leftGap).toBeLessThanOrEqual(initialLayout.cellWidth * 1.5);
+
   const before = await page.locator('#grid .cell').first().boundingBox();
   expect(before).not.toBeNull();
 
@@ -412,12 +425,18 @@ test('uses more of the available width after enlarging the window on Windows', a
   const layout = await page.evaluate(() => {
     const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
     const grid = document.getElementById('grid') as HTMLElement;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    const cell = grid.querySelector('.cell') as HTMLElement;
     return {
       wrapperWidth: wrapper.clientWidth,
       gridWidth: grid.getBoundingClientRect().width,
+      leftGap: gridRect.left - wrapperRect.left,
+      cellWidth: cell.getBoundingClientRect().width,
     };
   });
-  expect(layout.gridWidth).toBeGreaterThan(layout.wrapperWidth * 0.8);
+  expect(layout.gridWidth).toBeGreaterThan(layout.wrapperWidth * 0.92);
+  expect(layout.leftGap).toBeLessThanOrEqual(layout.cellWidth * 1.5);
 });
 
 test('captures preview panel appearance', async ({ page }) => {
@@ -697,13 +716,14 @@ test('keeps the Windows IME anchor to the left of the active text', async ({ pag
     textarea.selectionEnd = textarea.value.length;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
-  }, 'あ'.repeat(90));
+  }, 'こんにちは');
 
   const cursorBox = await page.locator('.cell.cursor-cell').boundingBox();
   const inputBox = await page.locator('#hidden-input').boundingBox();
   expect(cursorBox).not.toBeNull();
   expect(inputBox).not.toBeNull();
   expect((inputBox?.x ?? 0) + (inputBox?.width ?? 0)).toBeLessThanOrEqual((cursorBox?.x ?? 0) - 12);
+  expect((cursorBox?.x ?? 0) - ((inputBox?.x ?? 0) + (inputBox?.width ?? 0))).toBeLessThanOrEqual(64);
 });
 
 test('keeps the Windows IME anchor stable when composition starts', async ({ page }) => {
