@@ -18,8 +18,10 @@ jobs:
         include:
           - platform: macos-latest
             portable: false
+            tauriArgs: '--bundles app'
           - platform: windows-latest
             portable: true
+            tauriArgs: ''
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -71,6 +73,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           releaseAssetNamePattern: 'tenseijingo-editor_[version]_[platform]_[arch][setup][ext]'
+          args: ${{ matrix.tauriArgs }}
 
       # mainブランチpush時: ビルドのみ（キャッシュを温める）
       - name: Build (cache warm)
@@ -78,6 +81,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: ./tenseijingo-app
+          args: ${{ matrix.tauriArgs }}
 
       - name: Create portable zip (Windows)
         if: matrix.portable && startsWith(github.ref, 'refs/tags/')
