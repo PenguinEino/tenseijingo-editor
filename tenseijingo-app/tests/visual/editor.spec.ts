@@ -562,6 +562,15 @@ test('keeps the cursor visible while extending into overflow columns on Windows'
   }, 'あ'.repeat(140));
 
   await expect(page.locator('html')).toHaveAttribute('data-platform', 'windows');
+  const scrollMetrics = await page.locator('#grid-wrapper').evaluate((element) => {
+    const wrapper = element as HTMLElement;
+    return {
+      scrollWidth: wrapper.scrollWidth,
+      clientWidth: wrapper.clientWidth,
+      scrollLeft: wrapper.scrollLeft,
+    };
+  });
+  expect(scrollMetrics.scrollWidth).toBeGreaterThan(scrollMetrics.clientWidth);
   await expect.poll(async () => Number(await page.locator('.cell.cursor-cell').getAttribute('data-col'))).toBeGreaterThan(8);
   await expectCursorVisibleInsideGrid(page);
 });

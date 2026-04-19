@@ -305,8 +305,19 @@ body {
 
 /* ===== Grid ===== */
 #grid-wrapper {
-  flex: 1 1 auto; display: flex; align-items: center; justify-content: flex-end;
-  padding: 18px 26px; overflow: auto; min-width: 0;
+  flex: 1 1 auto;
+  padding: 18px 26px;
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+}
+#grid-stage {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
 }
 #grid {
   display: inline-flex; flex-direction: row-reverse;
