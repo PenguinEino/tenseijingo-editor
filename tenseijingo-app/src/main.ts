@@ -66,7 +66,7 @@ interface AppSettings {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
+  kinsokuHead: '、。，．,.！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
   kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
   kinsokuColorHex: '#d24646',
   viewZoom: 1,
@@ -243,10 +243,6 @@ const KAKKO_CLOSE_SET = new Set<string>(['」', '』']);
 const VERTICAL_GLYPH_MAP: Record<string, string> = {
   '。': '︒',
   '、': '︑',
-  '，': '︐',
-  '．': '︒',
-  '.': '︒',
-  ',': '︐',
   '「': '﹁',
   '」': '﹂',
   '『': '﹃',
