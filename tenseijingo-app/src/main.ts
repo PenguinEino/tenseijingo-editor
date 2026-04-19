@@ -1115,7 +1115,8 @@ function getAutoCellSize() {
 
   const fitByWidth = Math.floor((width - 1) / BASE_COLS);
   const fitByHeight = Math.floor((height - 1) / ROWS);
-  const fitted = Math.min(fitByWidth, fitByHeight);
+  // Prioritize the manuscript width and let vertical overflow scroll when needed.
+  const fitted = fitByWidth > 0 ? fitByWidth : fitByHeight;
   if (!Number.isFinite(fitted) || fitted <= 0) return BASE_CELL_SIZE;
 
   return Math.max(BASE_CELL_SIZE, Math.min(MAX_AUTO_CELL_SIZE, fitted));
@@ -1154,6 +1155,48 @@ function getCellViewportRect(col: number, row: number) {
     right: rect.right,
     bottom: rect.bottom,
   };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function applyTextareaRect(rect: { left: number; top: number; width: number; height: number }) {
+  textarea.style.left = `${Math.round(rect.left)}px`;
+  textarea.style.top = `${Math.round(rect.top)}px`;
+  textarea.style.width = `${Math.max(1, Math.round(rect.width))}px`;
+  textarea.style.height = `${Math.max(1, Math.round(rect.height))}px`;
+}
+
+function getWindowsImeDockRect(referenceRect: ReturnType<typeof getCellViewportRect>) {
+  const wrapperRect = gridWrapperEl.getBoundingClientRect();
+  const gridRect = gridEl.getBoundingClientRect();
+  const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
+  const baseWidth = Math.max(20, Math.round((referenceRect?.width ?? currentCellSize) * 0.7));
+  const desiredHeight = Math.max(Math.round((referenceRect?.height ?? currentCellSize) * 8), 180);
+  const topMin = Math.max((toolbarRect?.bottom ?? 0) + 12, wrapperRect.top + 8);
+  const height = Math.min(desiredHeight, Math.max((referenceRect?.height ?? currentCellSize) * 4, window.innerHeight - topMin - 24));
+  const topMax = Math.max(topMin, window.innerHeight - height - 24);
+  const top = clamp(referenceRect?.top ?? topMin, topMin, topMax);
+  const leftGap = Math.max(0, gridRect.left - wrapperRect.left);
+  const preferredLeft = wrapperRect.left + Math.max(12, leftGap - baseWidth - 12);
+  const leftMax = Math.max(12, window.innerWidth - baseWidth - 24);
+  return {
+    left: clamp(preferredLeft, 12, leftMax),
+    top,
+    width: baseWidth,
+    height,
+  };
+}
+
+function positionHiddenInput() {
+  const rect = getCellViewportRect(gridCursor.col, gridCursor.row);
+  if (!rect) return;
+  if (isWindows) {
+    applyTextareaRect(getWindowsImeDockRect(rect));
+    return;
+  }
+  applyTextareaRect(rect);
 }
 
 // ===== Grid DOM =====
@@ -1523,13 +1566,7 @@ function render() {
   // 変換中に位置を動かすとIMEがリセットされ候補が消える
 
   if (!isComposing) {
-    const rect = getCellViewportRect(gridCursor.col, gridCursor.row);
-    if (rect) {
-      textarea.style.left = rect.left + 'px';
-      textarea.style.top = rect.top + 'px';
-      textarea.style.width = rect.width + 'px';
-      textarea.style.height = rect.height + 'px';
-    }
+    positionHiddenInput();
   }
 }
 
@@ -1567,29 +1604,23 @@ function resetCursor() {
 function positionCompositionInput() {
   const rect = getCellViewportRect(compCellCol, compCellRow);
   if (!rect) return;
-  const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
-  const top = Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top);
-
   if (isWindows) {
-    const inputWidth = Math.max(Math.round(rect.width * 1.15), 36);
-    const desiredHeight = Math.max(Math.round(rect.height * 8), 180);
-    const inputHeight = Math.min(desiredHeight, Math.max(rect.height * 3, window.innerHeight - top - 24));
-    const left = Math.min(window.innerWidth - inputWidth - 24, rect.right + 10);
-    textarea.style.left = `${Math.max(12, left)}px`;
-    textarea.style.top = `${top}px`;
-    textarea.style.width = inputWidth + 'px';
-    textarea.style.height = inputHeight + 'px';
+    applyTextareaRect(getWindowsImeDockRect(rect));
     return;
   }
+  const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
+  const top = Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top);
 
   const inputWidth = 220;
   const inputHeight = rect.height * 2;
   const anchorGap = 24;
   const anchorRight = Math.min(window.innerWidth - 24, rect.right + anchorGap);
-  textarea.style.left = `${anchorRight - inputWidth}px`;
-  textarea.style.top = `${top}px`;
-  textarea.style.width = inputWidth + 'px';
-  textarea.style.height = inputHeight + 'px';
+  applyTextareaRect({
+    left: anchorRight - inputWidth,
+    top,
+    width: inputWidth,
+    height: inputHeight,
+  });
 }
 
 function setCompositionAnchorActive(active: boolean) {

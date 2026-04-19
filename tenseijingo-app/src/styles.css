@@ -436,6 +436,16 @@ body {
   white-space: nowrap;
 }
 
+:root[data-platform='windows'] #hidden-input {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  white-space: normal;
+  text-align: left;
+  direction: ltr;
+  line-height: 1;
+  font-size: 1px;
+}
+
 #hidden-input.ime-anchor-active {
   opacity: 0.01;
   z-index: 2000;
@@ -448,13 +458,7 @@ body {
 }
 
 :root[data-platform='windows'] #hidden-input.ime-anchor-active {
-  writing-mode: vertical-rl;
-  text-orientation: upright;
-  white-space: normal;
   text-align: left;
-  direction: ltr;
-  line-height: 1;
-  font-size: 1px;
 }
 
 /* ===== Modal Dialog ===== */

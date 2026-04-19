@@ -394,6 +394,32 @@ test('grows the grid on a larger viewport', async ({ page }) => {
   }).toBeGreaterThan((before?.width ?? 0) + 1);
 });
 
+test('uses more of the available width after enlarging the window on Windows', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 720 });
+  await bootstrap(page, { platformOverride: 'windows' });
+  await openEditor(page);
+
+  const before = await page.locator('#grid .cell').first().boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.setViewportSize({ width: 1700, height: 720 });
+
+  await expect.poll(async () => {
+    const after = await page.locator('#grid .cell').first().boundingBox();
+    return after?.width ?? 0;
+  }).toBeGreaterThan((before?.width ?? 0) + 6);
+
+  const layout = await page.evaluate(() => {
+    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
+    const grid = document.getElementById('grid') as HTMLElement;
+    return {
+      wrapperWidth: wrapper.clientWidth,
+      gridWidth: grid.getBoundingClientRect().width,
+    };
+  });
+  expect(layout.gridWidth).toBeGreaterThan(layout.wrapperWidth * 0.8);
+});
+
 test('captures preview panel appearance', async ({ page }) => {
   await bootstrap(page);
   await openEditor(page);
@@ -647,6 +673,60 @@ test('uses a vertical IME anchor on Windows to avoid left drift during compositi
   const inputBox = await page.locator('#hidden-input').boundingBox();
   expect(inputBox).not.toBeNull();
   expect((inputBox?.height ?? 0)).toBeGreaterThan((inputBox?.width ?? 0) * 3);
+});
+
+test('keeps the Windows IME anchor to the left of the active text', async ({ page }) => {
+  await bootstrap(page, {
+    platformOverride: 'windows',
+    files: [{
+      id: 'file-1',
+      title: 'Windows IME位置確認',
+      body: '',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 0,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  await page.locator('#hidden-input').evaluate((element, value) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.value = value as string;
+    textarea.selectionStart = textarea.value.length;
+    textarea.selectionEnd = textarea.value.length;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+  }, 'あ'.repeat(90));
+
+  const cursorBox = await page.locator('.cell.cursor-cell').boundingBox();
+  const inputBox = await page.locator('#hidden-input').boundingBox();
+  expect(cursorBox).not.toBeNull();
+  expect(inputBox).not.toBeNull();
+  expect((inputBox?.x ?? 0) + (inputBox?.width ?? 0)).toBeLessThanOrEqual((cursorBox?.x ?? 0) - 12);
+});
+
+test('keeps the Windows IME anchor stable when composition starts', async ({ page }) => {
+  await bootstrap(page, { platformOverride: 'windows' });
+  await openEditor(page);
+
+  const before = await page.locator('#hidden-input').boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.locator('#hidden-input').evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+  });
+
+  const after = await page.locator('#hidden-input').boundingBox();
+  expect(after).not.toBeNull();
+  expect(Math.abs((after?.x ?? 0) - (before?.x ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((after?.width ?? 0) - (before?.width ?? 0))).toBeLessThanOrEqual(1);
+  expect(Math.abs((after?.height ?? 0) - (before?.height ?? 0))).toBeLessThanOrEqual(1);
 });
 
 test('switches save directory after confirmation and updates the label', async ({ page }) => {
