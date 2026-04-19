@@ -103,10 +103,29 @@ body {
 #fm-new:hover { background: #3b6fc4 !important; }
 
 #fm-list-wrapper {
-  flex: 1; overflow-y: auto; padding: 20px;
-  display: flex; justify-content: center;
+  flex: 1; overflow: hidden; padding: 20px;
 }
-#fm-list { width: 100%; max-width: 700px; }
+#fm-content {
+  width: 100%; max-width: 1080px; margin: 0 auto;
+  display: flex; align-items: stretch; gap: 20px;
+  justify-content: center;
+  height: 100%;
+}
+#fm-content.has-preview {
+  justify-content: flex-start;
+}
+#fm-list {
+  width: 100%; max-width: 700px; min-width: 0;
+  flex: 0 1 700px;
+  overflow-y: auto;
+  max-height: 100%;
+  min-height: 0;
+  padding-right: 4px;
+}
+#fm-content.has-preview #fm-list {
+  flex: 1 1 auto;
+  max-width: none;
+}
 
 .fm-item {
   display: flex; align-items: center; gap: 14px;
@@ -117,10 +136,22 @@ body {
 }
 .fm-item:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.07); border-color: #ccd; }
 .fm-item-info { flex: 1; min-width: 0; }
+.fm-item-title-row {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px; min-width: 0;
+}
 .fm-item-title {
+  flex: 0 1 auto; min-width: 0; max-width: 100%;
   font-size: 14px; font-weight: 600; color: #2c3e50;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.fm-item-rename {
+  flex-shrink: 0;
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 11px; padding: 2px 8px; border: 1px solid #d7dbe2;
+  border-radius: 999px; background: #fff; cursor: pointer; color: #5f6b7a;
+  transition: all 0.15s;
+}
+.fm-item-rename:hover { background: #f5f6f8; border-color: #c6ced8; }
 .fm-item-meta { font-size: 11px; color: #999; margin-top: 3px; }
 .fm-item-preview {
   font-size: 12px; color: #777; margin-top: 5px;
@@ -135,12 +166,38 @@ body {
   transition: all 0.15s;
 }
 .fm-item-actions button:hover { background: #f5f6f8; }
+.fm-item-actions button.active {
+  background: #e8edf8;
+  border-color: #97add6;
+  color: #365b9a;
+  box-shadow: inset 0 0 0 1px rgba(74,127,212,0.08);
+}
+.fm-item-actions button.active:hover { background: #dfe7f6; }
 .fm-item-actions button.danger { color: #c44; border-color: #e0b0b0; }
 .fm-item-actions button.danger:hover { background: #fef0f0; }
 .fm-empty {
   text-align: center; padding: 80px 20px; color: #b0b4bc;
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
   font-size: 14px; line-height: 2;
+}
+
+@media (max-width: 980px) {
+  #fm-content {
+    flex-direction: column;
+    justify-content: flex-start;
+    height: auto;
+  }
+  #fm-list,
+  #fm-content.has-preview #fm-list {
+    max-width: none;
+    flex-basis: auto;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+  #fm-list-wrapper {
+    overflow: auto;
+  }
 }
 
 /* ===== Editor Toolbar ===== */
@@ -193,6 +250,24 @@ body {
   font-size: 13px; font-weight: 600; color: #2c3e50;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 300px;
+  border: none !important;
+  background: transparent !important;
+  padding: 2px 6px !important;
+}
+#editor-title:hover {
+  background: #eef2f8 !important;
+  border-color: transparent !important;
+}
+#editor-title-input {
+  width: min(320px, 42vw);
+  font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
+  font-size: 13px; font-weight: 600; color: #2c3e50;
+  padding: 3px 8px; border: 1px solid #b9c5d5; border-radius: 6px;
+  background: #fff; outline: none;
+}
+#editor-title-input:focus {
+  border-color: #4a7fd4;
+  box-shadow: 0 0 0 2px rgba(74,127,212,0.14);
 }
 #save-status {
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
@@ -348,6 +423,17 @@ body {
   opacity: 0; z-index: -1; border: none; resize: none; outline: none;
   overflow: hidden; padding: 0; font-size: 16px;
   white-space: nowrap;
+}
+
+#hidden-input.ime-anchor-active {
+  opacity: 0.01;
+  z-index: 2000;
+  pointer-events: none;
+  color: transparent;
+  background: transparent;
+  caret-color: transparent;
+  text-align: right;
+  direction: ltr;
 }
 
 /* ===== Modal Dialog ===== */
@@ -530,34 +616,50 @@ body {
 #editor-body > #grid-wrapper { flex: 1 1 auto; }
 
 /* ===== Preview Side Panel ===== */
-#preview-panel {
+#preview-panel,
+#fm-preview-panel {
   width: 320px; flex-shrink: 0;
   border-left: 1px solid #d8dbe0; background: #fafbfc;
   display: flex; flex-direction: column;
 }
-#preview-header {
+#fm-preview-panel {
+  width: min(360px, 100%);
+  align-self: stretch;
+  min-height: 0;
+}
+#preview-header,
+#fm-preview-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px; border-bottom: 1px solid #e2e5ea; flex-shrink: 0;
 }
-#preview-title {
+#preview-title,
+#fm-preview-title {
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
   font-size: 12px; font-weight: 600; color: #2c3e50;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   min-width: 0; flex: 1;
 }
-#preview-header-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: 8px; }
-#preview-header-actions button {
+#preview-header-actions,
+#fm-preview-header-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: 8px; }
+#preview-header-actions button,
+#fm-preview-header-actions button {
   font-family: "游ゴシック","Yu Gothic","メイリオ",Meiryo,sans-serif;
   font-size: 11px; padding: 3px 10px; border: 1px solid #d0d3d8;
   border-radius: 4px; background: #fff; cursor: pointer; color: #555;
   transition: all 0.15s;
 }
-#preview-header-actions button:hover { background: #f0f1f4; }
-#btn-preview-copy { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
-#btn-preview-copy:hover { background: #3b6fc4; }
-#btn-preview-close { color: #999; border-color: transparent; background: transparent; font-size: 13px; }
-#btn-preview-close:hover { color: #555; background: #eee; }
-#preview-text {
+#preview-header-actions button:hover,
+#fm-preview-header-actions button:hover { background: #f0f1f4; }
+#btn-preview-copy,
+#fm-preview-copy { background: #4a7fd4; color: #fff; border-color: #4a7fd4; }
+#btn-preview-copy:hover,
+#fm-preview-copy:hover { background: #3b6fc4; }
+#btn-preview-close,
+#fm-preview-close { color: #999; border-color: transparent; background: transparent; font-size: 13px; }
+#btn-preview-close:hover,
+#fm-preview-close:hover { color: #555; background: #eee; }
+#preview-text,
+#fm-preview-text {
   flex: 1; resize: none; outline: none;
   padding: 12px; margin: 12px;
   font-family: "游明朝","Yu Mincho","MS 明朝",serif;

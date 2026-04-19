@@ -154,7 +154,18 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
               entry: fileMap.get('file-1'),
               history_status: 'committed',
             };
-          case 'rename_file':
+          case 'rename_file': {
+            const id = String(args.id);
+            const current = fileMap.get(id);
+            if (!current) return { history_status: 'committed' };
+            const title = String(args.title ?? current.title);
+            fileMap.set(id, {
+              ...current,
+              title,
+              custom_title: true,
+            });
+            return { history_status: 'committed' };
+          }
           case 'delete_file':
             return { history_status: 'committed' };
           case 'export_file_to':
@@ -199,6 +210,144 @@ test('captures file manager appearance', async ({ page }) => {
   await expect(page.locator('#file-manager')).toBeVisible();
   await expect(page.locator('#fm-list .fm-item')).toHaveCount(1);
   await expect(page).toHaveScreenshot('file-manager.png');
+});
+
+test('renames a manuscript directly from the file list', async ({ page }) => {
+  await bootstrap(page);
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  await page.locator('.fm-item-rename').click();
+  await expect(page.locator('#modal-overlay')).toBeVisible();
+  await page.locator('#modal-input').fill('一覧から変更');
+  await page.locator('#modal-ok').click();
+
+  await expect(page.locator('.fm-item-title')).toHaveText('一覧から変更');
+  await expect(page.getByText('名前を変更しました')).toBeVisible();
+});
+
+test('opens preview in the file list sidebar without entering the editor', async ({ page }) => {
+  await bootstrap(page);
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  await page.locator('.act-preview').click();
+
+  await expect(page.locator('#file-manager')).toBeVisible();
+  await expect(page.locator('#editor-screen')).toBeHidden();
+  await expect(page.locator('#fm-preview-panel')).toBeVisible();
+  await expect(page.locator('#fm-preview-title')).toHaveText('縦書き表示確認');
+  await expect(page.locator('#fm-preview-text')).toHaveValue('「テスト」。\n（99）ー');
+  await expect(page.locator('.act-preview')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('toggles the same file preview button in the file list', async ({ page }) => {
+  await bootstrap(page);
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  await page.locator('.act-preview').click();
+  await expect(page.locator('#fm-preview-panel')).toBeVisible();
+  await expect(page.locator('.act-preview')).toHaveClass(/active/);
+
+  await page.locator('.act-preview').click();
+  await expect(page.locator('#fm-preview-panel')).toBeHidden();
+  await expect(page.locator('.act-preview')).not.toHaveClass(/active/);
+  await expect(page.locator('.act-preview')).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('switches the file list preview to another manuscript', async ({ page }) => {
+  await bootstrap(page, {
+    files: [
+      {
+        id: 'file-1',
+        title: '一つ目の原稿',
+        body: '一つ目の本文',
+        updated_at: '2026-04-16T10:00:00',
+        char_count: 6,
+        custom_title: true,
+      },
+      {
+        id: 'file-2',
+        title: '二つ目の原稿',
+        body: '二つ目の本文',
+        updated_at: '2026-04-16T09:00:00',
+        char_count: 6,
+        custom_title: true,
+      },
+    ],
+  });
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  await page.locator('.act-preview').nth(0).click();
+  await expect(page.locator('#fm-preview-title')).toHaveText('一つ目の原稿');
+  await expect(page.locator('.act-preview').nth(0)).toHaveClass(/active/);
+
+  await page.locator('.act-preview').nth(1).click();
+  await expect(page.locator('#fm-preview-title')).toHaveText('二つ目の原稿');
+  await expect(page.locator('#fm-preview-text')).toHaveValue('二つ目の本文');
+  await expect(page.locator('.act-preview').nth(0)).not.toHaveClass(/active/);
+  await expect(page.locator('.act-preview').nth(1)).toHaveClass(/active/);
+});
+
+test('keeps the file list preview aligned with the list top margin', async ({ page }) => {
+  await bootstrap(page, {
+    files: Array.from({ length: 12 }, (_, index) => ({
+      id: `file-${index + 1}`,
+      title: `原稿${index + 1}`,
+      body: `本文${index + 1}`,
+      updated_at: `2026-04-${String(16 - Math.min(index, 9)).padStart(2, '0')}T10:00:00`,
+      char_count: 3,
+      custom_title: true,
+    })),
+  });
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  const targetItem = page.locator('.fm-item').last();
+  const targetButton = targetItem.locator('.act-preview');
+  await targetButton.scrollIntoViewIfNeeded();
+  const targetItemBox = await targetItem.boundingBox();
+  expect(targetItemBox).not.toBeNull();
+
+  await targetButton.click();
+
+  const previewBox = await page.locator('#fm-preview-panel').boundingBox();
+  const wrapperBox = await page.locator('#fm-list-wrapper').boundingBox();
+  expect(previewBox).not.toBeNull();
+  expect(wrapperBox).not.toBeNull();
+  expect(Math.abs((previewBox?.y ?? 0) - (wrapperBox?.y ?? 0))).toBeLessThanOrEqual(24);
+});
+
+test('opens the file list preview even when the manuscript exceeds the character limit', async ({ page }) => {
+  await bootstrap(page, {
+    files: [{
+      id: 'file-1',
+      title: '文字数超過原稿',
+      body: 'あ'.repeat(640),
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 640,
+      custom_title: true,
+    }],
+  });
+  await expect(page.locator('#file-manager')).toBeVisible();
+
+  await page.locator('.act-preview').click();
+
+  await expect(page.locator('#fm-preview-panel')).toBeVisible();
+  await expect(page.locator('#fm-preview-title')).toHaveText('文字数超過原稿');
+  await expect(page.locator('#fm-preview-text')).not.toHaveValue('');
+  await expect(page.locator('.act-preview')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('edits the title directly from the editor toolbar', async ({ page }) => {
+  await bootstrap(page);
+  await openEditor(page);
+
+  await page.locator('#editor-title').click();
+  await expect(page.locator('#editor-title-input')).toBeVisible();
+  await page.locator('#editor-title-input').fill('直接変更した題名');
+  await page.locator('#editor-title-input').press('Enter');
+
+  await expect(page.locator('#editor-title')).toHaveText('直接変更した題名');
+  await expect(page.locator('#editor-title-input')).toBeHidden();
+  await expect(page.getByText('名前を変更しました')).toBeVisible();
 });
 
 test('captures editor grid appearance', async ({ page }) => {
@@ -363,6 +512,42 @@ test('keeps the cursor visible during IME composition', async ({ page }) => {
   await expect(page.locator('.cell.composing')).toHaveCount(1);
   await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-col', '0');
   await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '5');
+});
+
+test('keeps the IME anchor near the active cell on upper rows', async ({ page }) => {
+  await bootstrap(page, {
+    files: [{
+      id: 'file-1',
+      title: 'IME上端確認',
+      body: '',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 0,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press('ArrowUp');
+  }
+
+  const cursorBox = await page.locator('.cell.cursor-cell').boundingBox();
+  expect(cursorBox).not.toBeNull();
+
+  await page.locator('#hidden-input').evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+  });
+
+  const inputBox = await page.locator('#hidden-input').boundingBox();
+  expect(inputBox).not.toBeNull();
+  expect(Math.abs((inputBox?.y ?? 0) - (cursorBox?.y ?? 0))).toBeLessThan(60);
+  expect(Math.abs(((inputBox?.x ?? 0) + (inputBox?.width ?? 0)) - ((cursorBox?.x ?? 0) + (cursorBox?.width ?? 0)))).toBeLessThanOrEqual(24);
+  await expect(page.locator('#hidden-input')).toHaveClass(/ime-anchor-active/);
+  await expect(page.locator('#hidden-input')).toHaveCSS('text-align', 'right');
 });
 
 test('switches save directory after confirmation and updates the label', async ({ page }) => {

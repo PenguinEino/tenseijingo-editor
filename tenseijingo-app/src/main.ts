@@ -186,12 +186,18 @@ let isDirty = false;
 // ===== DOM refs =====
 let fileManagerEl: HTMLElement;
 let editorScreenEl: HTMLElement;
+let fmContentEl: HTMLElement;
 let fmListEl: HTMLElement;
+let fmPreviewPanelEl: HTMLElement;
+let fmPreviewTitleEl: HTMLElement;
+let fmPreviewTextEl: HTMLTextAreaElement;
+let fmPreviewCopyBtn: HTMLButtonElement;
 let gridWrapperEl: HTMLElement;
 let gridEl: HTMLElement;
 let textarea: HTMLTextAreaElement;
 let statusText: HTMLElement;
-let editorTitleEl: HTMLElement;
+let editorTitleEl: HTMLButtonElement;
+let editorTitleInputEl: HTMLInputElement;
 let saveStatusEl: HTMLElement;
 let fmFileInput: HTMLInputElement;
 let viewZoomValueEl: HTMLElement;
@@ -202,6 +208,8 @@ let gridDashedBtnEl: HTMLButtonElement;
 let settingsPreviewMode: 'char' | 'tcy' = 'char';
 let settingsCursorPreviewPosition: AppSettings['cursorPosition'] = 'top';
 let currentCellSize = BASE_CELL_SIZE;
+let fileManagerPreviewId: string | null = null;
+let isEditingTitleInline = false;
 
 // ===== Editor state =====
 let totalCols = BASE_COLS;
@@ -678,6 +686,53 @@ function hidePreview() {
   scheduleLayoutRefresh();
 }
 
+function getFileEntryPreviewTitle(file: FileEntry) {
+  return file.custom_title ? file.title : deriveTitle(file.body);
+}
+
+function getFileEntryPreviewText(file: FileEntry) {
+  try {
+    const formatted = formatBodyAsLines(file.body);
+    if (formatted || !file.body) return formatted;
+  } catch {}
+  return file.body;
+}
+
+function showFileManagerPreview(file: FileEntry) {
+  fileManagerPreviewId = file.id;
+  fmPreviewTitleEl.textContent = getFileEntryPreviewTitle(file);
+  fmPreviewTextEl.value = getFileEntryPreviewText(file);
+  fmPreviewCopyBtn.textContent = 'コピー';
+  fmContentEl.classList.add('has-preview');
+  fmPreviewPanelEl.style.display = 'flex';
+  updateFileManagerPreviewButtonState();
+}
+
+function hideFileManagerPreview() {
+  fileManagerPreviewId = null;
+  fmContentEl.classList.remove('has-preview');
+  fmPreviewPanelEl.style.display = 'none';
+  updateFileManagerPreviewButtonState();
+}
+
+function toggleFileManagerPreview(file: FileEntry) {
+  if (fileManagerPreviewId === file.id) {
+    hideFileManagerPreview();
+  } else {
+    showFileManagerPreview(file);
+  }
+}
+
+function updateFileManagerPreviewButtonState() {
+  const buttons = fmListEl.querySelectorAll('.act-preview');
+  buttons.forEach((button) => {
+    const el = button as HTMLButtonElement;
+    const isActive = fileManagerPreviewId !== null && el.dataset.fileId === fileManagerPreviewId;
+    el.classList.toggle('active', isActive);
+    el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+}
+
 // ===== Title helper =====
 function deriveTitle(body: string): string {
   const nl = body.indexOf('\n');
@@ -685,18 +740,41 @@ function deriveTitle(body: string): string {
   return firstLine ? firstLine.slice(0, 20) : '無題';
 }
 
+function getDisplayedTitle() {
+  return currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
+}
+
 function updateTitleDisplay() {
-  if (currentCustomTitle) {
-    editorTitleEl.textContent = currentTitle;
-  } else {
-    editorTitleEl.textContent = deriveTitle(textarea.value);
-  }
+  const nextTitle = getDisplayedTitle();
+  editorTitleEl.textContent = nextTitle;
+  if (!isEditingTitleInline) editorTitleInputEl.value = nextTitle;
+}
+
+function startInlineTitleEdit() {
+  if (!currentFileId || isEditingTitleInline) return;
+  isEditingTitleInline = true;
+  const nextTitle = getDisplayedTitle();
+  editorTitleInputEl.value = nextTitle;
+  editorTitleEl.style.display = 'none';
+  editorTitleInputEl.style.display = 'block';
+  setTimeout(() => {
+    editorTitleInputEl.focus();
+    editorTitleInputEl.select();
+  }, 0);
+}
+
+function stopInlineTitleEdit() {
+  isEditingTitleInline = false;
+  editorTitleInputEl.style.display = 'none';
+  editorTitleEl.style.display = 'inline-block';
+  updateTitleDisplay();
 }
 
 // ============================================================
 //  FILE MANAGER
 // ============================================================
 function showFileManager() {
+  if (isEditingTitleInline) stopInlineTitleEdit();
   fileManagerEl.style.display = 'flex';
   editorScreenEl.style.display = 'none';
   refreshFileList();
@@ -706,6 +784,7 @@ async function refreshFileList() {
   const files: FileEntry[] = await invoke('list_files');
   fmListEl.innerHTML = '';
   if (files.length === 0) {
+    hideFileManagerPreview();
     fmListEl.innerHTML = '<div class="fm-empty">原稿がありません。<br>「＋ 新規作成」で始めましょう。</div>';
     return;
   }
@@ -718,20 +797,38 @@ async function refreshFileList() {
       + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
     item.innerHTML = `
       <div class="fm-item-info">
-        <div class="fm-item-title">${escHtml(f.title)}</div>
+        <div class="fm-item-title-row">
+          <div class="fm-item-title">${escHtml(f.title)}</div>
+          <button class="fm-item-rename" type="button">変更</button>
+        </div>
         <div class="fm-item-meta">${dateStr}　${f.char_count} / ${BASE_MAX} 文字</div>
         <div class="fm-item-preview">${escHtml(preview)}</div>
       </div>
       <div class="fm-item-actions">
-        <button class="act-preview">プレビュー</button>
+        <button class="act-preview" type="button" data-file-id="${escHtml(f.id)}" aria-pressed="false">プレビュー</button>
         <button class="act-export">書出</button>
         <button class="act-delete danger">削除</button>
       </div>`;
     item.querySelector('.fm-item-info')!.addEventListener('click', () => openFile(f.id));
-    item.querySelector('.act-preview')!.addEventListener('click', (e) => { e.stopPropagation(); openFileWithPreview(f.id); });
+    item.querySelector('.fm-item-rename')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renameFile(f.id, f.title, { refreshList: true });
+    });
+    item.querySelector('.act-preview')!.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFileManagerPreview(f);
+    });
     item.querySelector('.act-export')!.addEventListener('click', (e) => { e.stopPropagation(); exportFileFromList(f); });
     item.querySelector('.act-delete')!.addEventListener('click', (e) => { e.stopPropagation(); deleteFile(f.id, f.title); });
     fmListEl.appendChild(item);
+  }
+
+  if (fileManagerPreviewId) {
+    const previewFile = files.find((file) => file.id === fileManagerPreviewId);
+    if (previewFile) showFileManagerPreview(previewFile);
+    else hideFileManagerPreview();
+  } else {
+    updateFileManagerPreviewButtonState();
   }
 }
 
@@ -743,12 +840,6 @@ async function createNewFile() {
   const created: CreateFileResult = await invoke('create_file');
   handleHistoryStatus(created.history_status, 'create');
   openFile(created.id);
-}
-
-async function openFileWithPreview(id: string) {
-  await openFile(id);
-  const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
-  togglePreview(title);
 }
 
 async function openFile(id: string) {
@@ -798,6 +889,7 @@ async function importFile(file: File) {
 function showEditor() {
   fileManagerEl.style.display = 'none';
   editorScreenEl.style.display = 'flex';
+  if (isEditingTitleInline) stopInlineTitleEdit();
   updateTitleDisplay();
   updateSaveStatus();
   buildGrid();
@@ -814,16 +906,41 @@ async function saveCurrentFile() {
   if (result.history_status === 'committed') showNotification('保存しました', { dismissOnInput: true });
 }
 
+async function applyTitleRename(id: string, title: string, newTitle: string, options: { refreshList?: boolean } = {}) {
+  if (newTitle === title) return true;
+  const result: HistoryActionResult = await invoke('rename_file', { id, title: newTitle });
+  handleHistoryStatus(result.history_status, 'rename');
+  if (currentFileId === id) {
+    currentTitle = newTitle;
+    currentCustomTitle = true;
+    updateTitleDisplay();
+  }
+  if (options.refreshList) await refreshFileList();
+  showNotification('名前を変更しました');
+  return true;
+}
+
+async function renameFile(id: string, title: string, options: { refreshList?: boolean } = {}) {
+  const newTitle = await customPrompt('新しいタイトル:', title);
+  if (newTitle === null || newTitle === title) return;
+  await applyTitleRename(id, title, newTitle, options);
+}
+
 async function renameCurrentFile() {
   if (!currentFileId) return;
-  const newTitle = await customPrompt('新しいタイトル:', currentTitle);
-  if (newTitle === null || newTitle === currentTitle) return;
-  const result: HistoryActionResult = await invoke('rename_file', { id: currentFileId, title: newTitle });
-  handleHistoryStatus(result.history_status, 'rename');
-  currentTitle = newTitle;
-  currentCustomTitle = true;
-  updateTitleDisplay();
-  showNotification('名前を変更しました');
+  await renameFile(currentFileId, currentTitle);
+}
+
+async function commitInlineTitleEdit() {
+  if (!currentFileId || !isEditingTitleInline) return;
+  const previousTitle = getDisplayedTitle();
+  const nextTitle = editorTitleInputEl.value.trim();
+  if (!nextTitle || nextTitle === previousTitle) {
+    stopInlineTitleEdit();
+    return;
+  }
+  await applyTitleRename(currentFileId, previousTitle, nextTitle);
+  stopInlineTitleEdit();
 }
 
 async function exportCurrentFile() {
@@ -1023,14 +1140,16 @@ function keepCursorCellInView() {
 
 function getCellViewportRect(col: number, row: number) {
   const cell = cells[col]?.[row];
-  const column = cell?.parentElement as HTMLElement | null;
-  if (!cell || !column) return null;
-  const wrapperRect = gridWrapperEl.getBoundingClientRect();
-  const left = wrapperRect.left + column.offsetLeft + cell.offsetLeft - gridWrapperEl.scrollLeft;
-  const top = wrapperRect.top + cell.offsetTop - gridWrapperEl.scrollTop;
-  const width = cell.offsetWidth;
-  const height = cell.offsetHeight;
-  return { left, top, width, height, right: left + width, bottom: top + height };
+  if (!cell) return null;
+  const rect = cell.getBoundingClientRect();
+  return {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+    right: rect.right,
+    bottom: rect.bottom,
+  };
 }
 
 // ===== Grid DOM =====
@@ -1447,21 +1566,17 @@ function positionCompositionInput() {
   const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
   const inputWidth = 220;
   const inputHeight = rect.height * 2;
-  const nearTop = toolbarRect ? rect.top < toolbarRect.bottom + rect.height * 6 : false;
-
-  if (nearTop && toolbarRect) {
-    const placeRight = rect.left < window.innerWidth / 2;
-    textarea.style.left = placeRight ? `${Math.max(24, window.innerWidth - inputWidth - 24)}px` : '24px';
-    textarea.style.top = (toolbarRect.bottom + 12) + 'px';
-  } else {
-    const showLeft = rect.right + inputWidth + 24 > window.innerWidth;
-    const nextLeft = showLeft ? Math.max(24, rect.left - inputWidth - 8) : Math.min(Math.max(24, window.innerWidth - inputWidth - 24), rect.right + 8);
-    textarea.style.left = `${nextLeft}px`;
-    textarea.style.top = `${Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top)}px`;
-  }
+  const anchorGap = 24;
+  const anchorRight = Math.min(window.innerWidth - 24, rect.right + anchorGap);
+  textarea.style.left = `${anchorRight - inputWidth}px`;
+  textarea.style.top = `${Math.max((toolbarRect?.bottom ?? 0) + 12, rect.top)}px`;
 
   textarea.style.width = inputWidth + 'px';
   textarea.style.height = inputHeight + 'px';
+}
+
+function setCompositionAnchorActive(active: boolean) {
+  textarea.classList.toggle('ime-anchor-active', active);
 }
 
 // ============================================================
@@ -1470,12 +1585,18 @@ function positionCompositionInput() {
 window.addEventListener('DOMContentLoaded', async () => {
   fileManagerEl = document.getElementById('file-manager')!;
   editorScreenEl = document.getElementById('editor-screen')!;
+  fmContentEl = document.getElementById('fm-content')!;
   fmListEl = document.getElementById('fm-list')!;
+  fmPreviewPanelEl = document.getElementById('fm-preview-panel')!;
+  fmPreviewTitleEl = document.getElementById('fm-preview-title')!;
+  fmPreviewTextEl = document.getElementById('fm-preview-text') as HTMLTextAreaElement;
+  fmPreviewCopyBtn = document.getElementById('fm-preview-copy') as HTMLButtonElement;
   gridWrapperEl = document.getElementById('grid-wrapper')!;
   gridEl = document.getElementById('grid')!;
   textarea = document.getElementById('hidden-input') as HTMLTextAreaElement;
   statusText = document.getElementById('status-text')!;
-  editorTitleEl = document.getElementById('editor-title')!;
+  editorTitleEl = document.getElementById('editor-title') as HTMLButtonElement;
+  editorTitleInputEl = document.getElementById('editor-title-input') as HTMLInputElement;
   saveStatusEl = document.getElementById('save-status')!;
   fmFileInput = document.getElementById('fm-file-input') as HTMLInputElement;
   viewZoomValueEl = document.getElementById('view-zoom-value')!;
@@ -1500,6 +1621,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   // File manager
   document.getElementById('fm-new')!.addEventListener('click', createNewFile);
   document.getElementById('fm-import')!.addEventListener('click', () => fmFileInput.click());
+  document.getElementById('fm-preview-close')!.addEventListener('click', hideFileManagerPreview);
+  fmPreviewCopyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(fmPreviewTextEl.value).then(() => {
+      fmPreviewCopyBtn.textContent = 'コピー済';
+      setTimeout(() => { fmPreviewCopyBtn.textContent = 'コピー'; }, 1200);
+    });
+  });
   fmFileInput.addEventListener('change', () => {
     const file = fmFileInput.files?.[0];
     if (file) importFile(file);
@@ -1510,6 +1638,19 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btn-back')!.addEventListener('click', backToList);
   document.getElementById('btn-save')!.addEventListener('click', saveCurrentFile);
   document.getElementById('btn-rename')!.addEventListener('click', renameCurrentFile);
+  editorTitleEl.addEventListener('click', startInlineTitleEdit);
+  editorTitleInputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitInlineTitleEdit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      stopInlineTitleEdit();
+    }
+  });
+  editorTitleInputEl.addEventListener('blur', () => {
+    if (isEditingTitleInline) commitInlineTitleEdit();
+  });
   document.getElementById('btn-export')!.addEventListener('click', exportCurrentFile);
   document.getElementById('btn-preview')!.addEventListener('click', () => {
     const title = currentCustomTitle ? currentTitle : deriveTitle(textarea.value);
@@ -1531,7 +1672,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   textarea.addEventListener('compositionstart', () => {
     dismissInputNotification();
     isComposing = true;
+    setCompositionAnchorActive(true);
     clearSavedStatusOnInput();
+    if (cursorSyncNeeded) syncFromRaw();
     compStart = textarea.selectionStart;
     compSuffixLen = textarea.value.length - textarea.selectionEnd;
     compCellCol = gridCursor.col;
@@ -1554,6 +1697,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   textarea.addEventListener('compositionend', () => {
     dismissInputNotification();
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
+    setCompositionAnchorActive(false);
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     scheduleCursorSync();

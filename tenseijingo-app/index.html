@@ -40,7 +40,19 @@
     </div>
   </div>
   <div id="fm-list-wrapper">
-    <div id="fm-list"></div>
+    <div id="fm-content">
+      <div id="fm-list"></div>
+      <div id="fm-preview-panel" style="display:none;">
+        <div id="fm-preview-header">
+          <span id="fm-preview-title"></span>
+          <div id="fm-preview-header-actions">
+            <button id="fm-preview-copy">コピー</button>
+            <button id="fm-preview-close">✕</button>
+          </div>
+        </div>
+        <textarea id="fm-preview-text" readonly></textarea>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -52,7 +64,8 @@
         <button id="btn-back" title="ファイル一覧に戻る">◁ 一覧</button>
       </div>
       <div class="tb-center">
-        <span id="editor-title">無題</span>
+        <button id="editor-title" type="button" title="クリックしてタイトルを編集">無題</button>
+        <input id="editor-title-input" type="text" style="display:none;" />
         <span id="save-status"></span>
       </div>
       <div class="tb-right">
