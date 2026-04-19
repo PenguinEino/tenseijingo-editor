@@ -36,6 +36,7 @@ async function bootstrap(page: Page, options: BootstrapOptions = {}) {
     const invokeLog: Array<{ cmd: string; args: Record<string, unknown> }> = [];
 
     localStorage.setItem('user_settings', JSON.stringify({
+      viewZoom: 1,
       fontScale: 0.72,
       baseFontWeight: 700,
       gridStyle: 'solid',
@@ -183,6 +184,10 @@ async function openEditor(page: Page) {
   await expect(page.locator('#grid .cell')).toHaveCount(35 * 18);
 }
 
+async function moveCursorToEnd(page: Page) {
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End');
+}
+
 test('captures first launch setup screen', async ({ page }) => {
   await bootstrap(page, { firstLaunch: true });
   await expect(page.locator('#setup-screen')).toBeVisible();
@@ -200,6 +205,21 @@ test('captures editor grid appearance', async ({ page }) => {
   await bootstrap(page);
   await openEditor(page);
   await expect(page).toHaveScreenshot('editor-grid.png');
+});
+
+test('grows the grid on a larger viewport', async ({ page }) => {
+  await bootstrap(page);
+  await openEditor(page);
+
+  const before = await page.locator('#grid .cell').first().boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.setViewportSize({ width: 1600, height: 1000 });
+
+  await expect.poll(async () => {
+    const after = await page.locator('#grid .cell').first().boundingBox();
+    return after?.width ?? 0;
+  }).toBeGreaterThan((before?.width ?? 0) + 1);
 });
 
 test('captures preview panel appearance', async ({ page }) => {
@@ -268,6 +288,81 @@ test('dismisses manual save notification immediately on next input', async ({ pa
   await expect(page.getByText('保存しました')).toBeVisible();
   await page.keyboard.type('あ');
   await expect(page.getByText('保存しました')).toBeHidden();
+});
+
+test('keeps the cursor visible after deleting back to the first cell', async ({ page }) => {
+  await bootstrap(page, {
+    files: [{
+      id: 'file-1',
+      title: '削除確認',
+      body: 'あいう',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 3,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+  await moveCursorToEnd(page);
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.cell.cursor-cell')).toHaveCount(1);
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.cell.cursor-cell')).toHaveCount(1);
+  await page.keyboard.press('Backspace');
+
+  await expect(page.locator('.cell.cursor-cell')).toHaveCount(1);
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-col', '0');
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '4');
+});
+
+test('keeps the cursor visible after deleting back to the top row of a later column', async ({ page }) => {
+  await bootstrap(page, {
+    files: [{
+      id: 'file-1',
+      title: '後半列削除確認',
+      body: 'あ'.repeat(85),
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 85,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+  await moveCursorToEnd(page);
+  await page.keyboard.press('Backspace');
+
+  await expect(page.locator('.cell.cursor-cell')).toHaveCount(1);
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-col', '6');
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '0');
+});
+
+test('keeps the cursor visible during IME composition', async ({ page }) => {
+  await bootstrap(page, {
+    files: [{
+      id: 'file-1',
+      title: 'IME確認',
+      body: '',
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 0,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  await page.locator('#hidden-input').evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    textarea.value = 'あ';
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = 0;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  await expect(page.locator('.cell.cursor-cell')).toHaveCount(1);
+  await expect(page.locator('.cell.composing')).toHaveCount(1);
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-col', '0');
+  await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '5');
 });
 
 test('switches save directory after confirmation and updates the label', async ({ page }) => {

@@ -230,8 +230,8 @@ body {
 
 /* ===== Grid ===== */
 #grid-wrapper {
-  flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
-  padding: 10px; overflow: auto; min-width: 0;
+  flex: 1 1 auto; display: flex; align-items: center; justify-content: flex-end;
+  padding: 18px 26px; overflow: auto; min-width: 0;
 }
 #grid {
   display: inline-flex; flex-direction: row-reverse;
@@ -247,7 +247,9 @@ body {
   width: var(--cell); height: var(--cell); background: #fff;
   display: flex; align-items: center; justify-content: center;
   font-size: var(--fs); cursor: text; position: relative;
+  isolation: isolate;
   font-weight: var(--base-weight);
+  scroll-margin: 20px 28px;
   -webkit-text-stroke: var(--weight-stroke) currentColor;
   text-shadow: var(--weight-shadow);
   paint-order: stroke fill;
@@ -259,6 +261,8 @@ body {
 .cell.cursor-cell::after {
   content: ''; position: absolute;
   background: #3b6fd4; animation: blink 1s step-end infinite;
+  pointer-events: none;
+  z-index: 2;
 }
 :root[data-cursor-position='top'] .cell.cursor-cell::after {
   left: 10%; right: 10%; top: 2px; height: 2px;
@@ -318,11 +322,13 @@ body {
   transform-origin: center;
 }
 
-.cell.composing::after {
+.cell.composing::before {
   content: ''; position: absolute;
   left: 15%; right: 15%; bottom: 10%; height: 2px; background: #333;
   animation: none;
   top: auto; width: auto; transform: none;
+  pointer-events: none;
+  z-index: 1;
 }
 .cell .tcy {
   font-size: var(--tcy); letter-spacing: -0.5px; white-space: nowrap; line-height: 1;

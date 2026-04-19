@@ -21,6 +21,9 @@ interface FlowResult {
   nextCol: number; nextRow: number;
   neededCols: number;
   newlineMarkers: GridCell[];
+  newlineMarkerSet: Set<number>;
+  displayCount: number;
+  maxOutputCol: number;
 }
 interface GitLogEntry {
   commit_hash: string;
@@ -54,6 +57,7 @@ interface AppSettings {
   kinsokuHead: string;
   kinsokuTail: string;
   kinsokuColorHex: string;
+  viewZoom: number;
   fontScale: number;
   baseFontWeight: number;
   gridStyle: 'solid' | 'dashed';
@@ -65,6 +69,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   kinsokuHead: '、。，．,．！？!?）)」』】〉》〕｝}：；:;ー～…‥・',
   kinsokuTail: '（(「『【〈《〔｛{▼▽△▲',
   kinsokuColorHex: '#d24646',
+  viewZoom: 1,
   fontScale: 0.6,
   baseFontWeight: 500,
   gridStyle: 'solid',
@@ -73,6 +78,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 let appSettings: AppSettings = { ...DEFAULT_SETTINGS };
+const VIEW_ZOOM_STEPS = [0.85, 0.93, 1, 1.08, 1.16, 1.25, 1.35];
 const FONT_SCALE_STEPS = [0.52, 0.58, 0.64, 0.72, 0.82];
 const FONT_WEIGHT_STEPS = [400, 500, 600, 700, 800, 900];
 
@@ -120,6 +126,7 @@ function loadSettings() {
       appSettings = { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch(e) {}
+  if (!VIEW_ZOOM_STEPS.includes(appSettings.viewZoom)) appSettings.viewZoom = DEFAULT_SETTINGS.viewZoom;
   if (!FONT_SCALE_STEPS.includes(appSettings.fontScale)) appSettings.fontScale = DEFAULT_SETTINGS.fontScale;
   if (!FONT_WEIGHT_STEPS.includes(appSettings.baseFontWeight)) appSettings.baseFontWeight = DEFAULT_SETTINGS.baseFontWeight;
   if (appSettings.gridStyle !== 'solid' && appSettings.gridStyle !== 'dashed') appSettings.gridStyle = DEFAULT_SETTINGS.gridStyle;
@@ -132,6 +139,10 @@ loadSettings();
 // ===== Constants =====
 const BASE_COLS = 35;
 const ROWS = 18;
+const BASE_CELL_SIZE = 34;
+const MAX_AUTO_CELL_SIZE = 56;
+const MIN_CELL_SIZE = 24;
+const MAX_CELL_SIZE = 72;
 
 // Pre-compute column configs
 const COL_CFG_CACHE: ColCfg[] = [];
@@ -176,18 +187,21 @@ let isDirty = false;
 let fileManagerEl: HTMLElement;
 let editorScreenEl: HTMLElement;
 let fmListEl: HTMLElement;
+let gridWrapperEl: HTMLElement;
 let gridEl: HTMLElement;
 let textarea: HTMLTextAreaElement;
 let statusText: HTMLElement;
 let editorTitleEl: HTMLElement;
 let saveStatusEl: HTMLElement;
 let fmFileInput: HTMLInputElement;
+let viewZoomValueEl: HTMLElement;
 let fontSizeValueEl: HTMLElement;
 let fontWeightValueEl: HTMLElement;
 let gridSolidBtnEl: HTMLButtonElement;
 let gridDashedBtnEl: HTMLButtonElement;
 let settingsPreviewMode: 'char' | 'tcy' = 'char';
 let settingsCursorPreviewPosition: AppSettings['cursorPosition'] = 'top';
+let currentCellSize = BASE_CELL_SIZE;
 
 // ===== Editor state =====
 let totalCols = BASE_COLS;
@@ -236,6 +250,7 @@ const VERTICAL_GLYPH_MAP: Record<string, string> = {
 };
 let prevCellStates: CellState[][] = [];
 let renderRAF = 0;
+let layoutRAF = 0;
 let saveStatusTimer: number | null = null;
 let historyPending = false;
 let activeNotification: { dismiss: () => void; dismissOnInput: boolean } | null = null;
@@ -244,8 +259,25 @@ let activeNotification: { dismiss: () => void; dismissOnInput: boolean } | null 
 let cachedText = '';
 let cachedUnits: Unit[] = [];
 let cachedFlow: FlowResult | null = null;
+let cachedRawStops: number[] = [];
+let cursorSyncNeeded = true;
 
-function invalidateCache() { cachedFlow = null; }
+function invalidateCache() {
+  cachedFlow = null;
+  cachedRawStops = [];
+  cursorSyncNeeded = true;
+}
+
+function scheduleLayoutRefresh() {
+  if (layoutRAF) cancelAnimationFrame(layoutRAF);
+  layoutRAF = requestAnimationFrame(() => {
+    layoutRAF = 0;
+    recalcSize();
+    updateInlineControlState();
+    if (isComposing) positionCompositionInput();
+    scheduleRender();
+  });
+}
 
 function getUnitsAndFlow(): { units: Unit[]; flow: FlowResult } {
   const text = textarea.value;
@@ -253,7 +285,28 @@ function getUnitsAndFlow(): { units: Unit[]; flow: FlowResult } {
   cachedText = text;
   cachedUnits = textToUnits(text);
   cachedFlow = flowToGrid(cachedUnits);
+  cachedRawStops = buildRawStops(cachedUnits, text.length);
   return { units: cachedUnits, flow: cachedFlow };
+}
+
+function getRawStops(): number[] {
+  const text = textarea.value;
+  if (cachedText !== text || !cachedFlow) getUnitsAndFlow();
+  return cachedRawStops;
+}
+
+function buildRawStops(units: Unit[], textLength: number): number[] {
+  const stops: number[] = [];
+  let prevStart = -1;
+  for (let i = 0; i < units.length; i++) {
+    const start = units[i].rawStart;
+    if (start !== prevStart) {
+      stops.push(start);
+      prevStart = start;
+    }
+  }
+  if (stops[stops.length - 1] !== textLength) stops.push(textLength);
+  return stops;
 }
 
 function shiftSettingStep(steps: number[], current: number, delta: number): number {
@@ -264,7 +317,8 @@ function shiftSettingStep(steps: number[], current: number, delta: number): numb
 }
 
 function updateInlineControlState() {
-  if (!fontSizeValueEl || !fontWeightValueEl) return;
+  if (!viewZoomValueEl || !fontSizeValueEl || !fontWeightValueEl) return;
+  viewZoomValueEl.textContent = `${Math.round((currentCellSize / BASE_CELL_SIZE) * 100)}%`;
   fontSizeValueEl.textContent = `${Math.round(appSettings.fontScale * 100)}%`;
   fontWeightValueEl.textContent = String(appSettings.baseFontWeight);
   gridSolidBtnEl.classList.toggle('active', appSettings.gridStyle === 'solid');
@@ -277,9 +331,15 @@ function persistDisplaySettings() {
 
 function applyDisplaySettings() {
   applySettings(appSettings);
-  updateInlineControlState();
   recalcSize();
+  updateInlineControlState();
   render();
+}
+
+function stepViewZoom(delta: number) {
+  appSettings.viewZoom = shiftSettingStep(VIEW_ZOOM_STEPS, appSettings.viewZoom, delta);
+  persistDisplaySettings();
+  applyDisplaySettings();
 }
 
 function stepFontScale(delta: number) {
@@ -547,21 +607,12 @@ let previewDirty = false;
 function formatBodyAsLines(body: string): string {
   const units = textToUnits(body);
   const flow = flowToGrid(units);
-  const { grid, unitPos } = flow;
+  const { grid, maxOutputCol } = flow;
 
   if (units.length === 0) return "";
 
-  let maxCol = 0;
-  for (let i = unitPos.length - 1; i >= 0; i--) {
-    if (unitPos[i]) {
-      maxCol = unitPos[i].col;
-      if (units[i].type === 'newline') maxCol++;
-      break;
-    }
-  }
-
   const lines: string[] = [];
-  for (let c = 0; c <= maxCol; c++) {
+  for (let c = 0; c <= maxOutputCol; c++) {
     let lineStr = "";
     const start = usableStart(c);
     const end = usableEnd(c);
@@ -579,25 +630,12 @@ function formatBodyAsLines(body: string): string {
 
 function getFormattedPreviewText(): string {
   const { units, flow } = getUnitsAndFlow();
-  const { grid, unitPos } = flow;
+  const { grid, maxOutputCol } = flow;
 
   if (units.length === 0) return "";
 
-  // 最後のユニットの位置から、出力すべき最大行（列）数を計算
-  let maxCol = 0;
-  for (let i = unitPos.length - 1; i >= 0; i--) {
-    if (unitPos[i]) {
-      maxCol = unitPos[i].col;
-      // 最後が明示的な改行なら次の行（列）まで出力する
-      if (units[i].type === 'newline') {
-        maxCol++;
-      }
-      break;
-    }
-  }
-
   let lines: string[] = [];
-  for (let c = 0; c <= maxCol; c++) {
+  for (let c = 0; c <= maxOutputCol; c++) {
     let lineStr = "";
     const start = usableStart(c);
     const end = usableEnd(c);
@@ -624,7 +662,7 @@ function togglePreview(title: string) {
   previewPanel.style.display = 'flex';
   previewVisible = true;
   previewDirty = false;
-  recalcSize();
+  scheduleLayoutRefresh();
 }
 function markPreviewDirty() { previewDirty = true; }
 function flushPreview() {
@@ -637,7 +675,7 @@ function flushPreview() {
 function hidePreview() {
   previewPanel.style.display = 'none';
   previewVisible = false;
-  recalcSize();
+  scheduleLayoutRefresh();
 }
 
 // ===== Title helper =====
@@ -764,6 +802,7 @@ function showEditor() {
   updateSaveStatus();
   buildGrid();
   recalcSize();
+  updateInlineControlState();
   render();
   textarea.focus();
 }
@@ -916,34 +955,90 @@ async function backToList() {
 }
 
 // ===== Responsive sizing =====
+function getContentBoxSize(el: HTMLElement): { width: number; height: number } {
+  const styles = window.getComputedStyle(el);
+  const paddingX = parseFloat(styles.paddingLeft) + parseFloat(styles.paddingRight);
+  const paddingY = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
+  return {
+    width: Math.max(0, el.clientWidth - paddingX),
+    height: Math.max(0, el.clientHeight - paddingY),
+  };
+}
+
+function getAutoCellSize() {
+  if (!gridWrapperEl) return BASE_CELL_SIZE;
+  const { width, height } = getContentBoxSize(gridWrapperEl);
+  if (width <= 0 || height <= 0) return BASE_CELL_SIZE;
+
+  const fitByWidth = Math.floor((width - 1) / BASE_COLS);
+  const fitByHeight = Math.floor((height - 1) / ROWS);
+  const fitted = Math.min(fitByWidth, fitByHeight);
+  if (!Number.isFinite(fitted) || fitted <= 0) return BASE_CELL_SIZE;
+
+  return Math.max(BASE_CELL_SIZE, Math.min(MAX_AUTO_CELL_SIZE, fitted));
+}
+
 function recalcSize() {
-  const toolbar = document.getElementById('toolbar');
-  const statusBar = document.getElementById('status-bar');
-  if (!toolbar || !statusBar) return;
-  const toolbarH = toolbar.offsetHeight;
-  const statusH = statusBar.offsetHeight;
-  const wrapPad = 20;
-  const overflowGap = totalCols > BASE_COLS ? 8 : 0;
-  const previewW = previewVisible ? previewPanel.offsetWidth + 1 : 0;
-  const availW = window.innerWidth - wrapPad * 2 - previewW;
-  const availH = window.innerHeight - toolbarH - statusH - wrapPad * 2;
-  const cellFromW = (availW - totalCols - 1 - overflowGap) / totalCols;
-  const cellFromH = (availH - ROWS - 1) / ROWS;
-  const cellSize = Math.max(14, Math.min(52, Math.floor(Math.min(cellFromW, cellFromH))));
+  const autoCellSize = getAutoCellSize();
+  const cellSize = Math.min(MAX_CELL_SIZE, Math.max(MIN_CELL_SIZE, Math.round(autoCellSize * appSettings.viewZoom)));
   const fontSize = Math.max(7, Math.round(cellSize * appSettings.fontScale));
   const boostedTcy = Math.round(fontSize * appSettings.tcyScale);
   const maxTcy = Math.floor(cellSize * 0.9);
   const tcySize = Math.max(6, Math.min(maxTcy, boostedTcy));
+  currentCellSize = cellSize;
   document.documentElement.style.setProperty('--cell', cellSize + 'px');
   document.documentElement.style.setProperty('--fs', fontSize + 'px');
   document.documentElement.style.setProperty('--tcy', tcySize + 'px');
 }
 
+function keepCursorCellInView() {
+  if (!gridWrapperEl) return;
+  const cell = cells[gridCursor.col]?.[gridCursor.row];
+  if (!cell) return;
+  const column = cell.parentElement as HTMLElement | null;
+  if (!column) return;
+  const marginX = 28;
+  const marginY = 20;
+  const cellLeft = column.offsetLeft + cell.offsetLeft;
+  const cellTop = cell.offsetTop;
+  const cellRight = cellLeft + cell.offsetWidth;
+  const cellBottom = cellTop + cell.offsetHeight;
+  const viewLeft = gridWrapperEl.scrollLeft;
+  const viewTop = gridWrapperEl.scrollTop;
+  const viewRight = viewLeft + gridWrapperEl.clientWidth;
+  const viewBottom = viewTop + gridWrapperEl.clientHeight;
+
+  if (cellLeft < viewLeft + marginX) {
+    gridWrapperEl.scrollLeft -= (viewLeft + marginX) - cellLeft;
+  } else if (cellRight > viewRight - marginX) {
+    gridWrapperEl.scrollLeft += cellRight - (viewRight - marginX);
+  }
+
+  if (cellTop < viewTop + marginY) {
+    gridWrapperEl.scrollTop -= (viewTop + marginY) - cellTop;
+  } else if (cellBottom > viewBottom - marginY) {
+    gridWrapperEl.scrollTop += cellBottom - (viewBottom - marginY);
+  }
+}
+
+function getCellViewportRect(col: number, row: number) {
+  const cell = cells[col]?.[row];
+  const column = cell?.parentElement as HTMLElement | null;
+  if (!cell || !column) return null;
+  const wrapperRect = gridWrapperEl.getBoundingClientRect();
+  const left = wrapperRect.left + column.offsetLeft + cell.offsetLeft - gridWrapperEl.scrollLeft;
+  const top = wrapperRect.top + cell.offsetTop - gridWrapperEl.scrollTop;
+  const width = cell.offsetWidth;
+  const height = cell.offsetHeight;
+  return { left, top, width, height, right: left + width, bottom: top + height };
+}
+
 // ===== Grid DOM =====
 function buildGrid() {
-  gridEl.innerHTML = '';
+  gridEl.textContent = '';
   cells = [];
   prevCellStates = [];
+  const fragment = document.createDocumentFragment();
   for (let c = 0; c < totalCols; c++) {
     const colDiv = document.createElement('div');
     colDiv.className = 'column';
@@ -959,13 +1054,13 @@ function buildGrid() {
       if (r >= tailStart) cellDiv.classList.add('tail-empty');
       cellDiv.dataset.col = String(c);
       cellDiv.dataset.row = String(r);
-      cellDiv.addEventListener('mousedown', onCellMouseDown);
       colDiv.appendChild(cellDiv);
       cells[c][r] = cellDiv;
       prevCellStates[c][r] = { text: '', type: 'empty', flags: 0 };
     }
-    gridEl.appendChild(colDiv);
+    fragment.appendChild(colDiv);
   }
+  gridEl.appendChild(fragment);
 }
 
 // ===== Text Processing =====
@@ -1009,7 +1104,10 @@ function flowToGrid(units: Unit[]): FlowResult {
   const grid: (number|null)[][] = [];
   const unitPos: { col: number; row: number }[] = [];
   const newlineMarkers: GridCell[] = [];
+  const newlineMarkerSet = new Set<number>();
   let col = 0, row = usableStart(0);
+  let neededCols = BASE_COLS;
+  let displayCount = 0;
   function ensure(c: number) {
     while (grid.length <= c) grid.push(new Array(ROWS).fill(null));
     if (c >= USABLE_START_CACHE.length) ensureColCache(c);
@@ -1018,45 +1116,95 @@ function flowToGrid(units: Unit[]): FlowResult {
     const u = units[ui];
     if (u.type === 'newline') {
       unitPos.push({ col, row: -1 });
-      if (row < usableEnd(col)) newlineMarkers.push({ col, row });
-      col++; row = usableStart(col);
+      if (row < usableEnd(col)) {
+        newlineMarkers.push({ col, row });
+        newlineMarkerSet.add(col * ROWS + row);
+      }
+      col++;
+      row = usableStart(col);
+      neededCols = Math.max(neededCols, col + 1);
       continue;
     }
     if (row >= usableEnd(col)) { col++; row = usableStart(col); }
     ensure(col);
     grid[col][row] = ui;
     unitPos.push({ col, row });
+    displayCount++;
     row++;
+    neededCols = Math.max(neededCols, col + 1);
+  }
+  if (row >= usableEnd(col)) {
+    col++;
+    row = usableStart(col);
+    neededCols = Math.max(neededCols, col + 1);
   }
   while (grid.length < BASE_COLS) grid.push(new Array(ROWS).fill(null));
-  return { grid, unitPos, nextCol: col, nextRow: row, neededCols: Math.max(BASE_COLS, grid.length), newlineMarkers };
+  let maxOutputCol = 0;
+  if (units.length > 0) {
+    const lastIndex = units.length - 1;
+    maxOutputCol = unitPos[lastIndex]?.col ?? 0;
+    if (units[lastIndex].type === 'newline') maxOutputCol++;
+  }
+  return {
+    grid,
+    unitPos,
+    nextCol: col,
+    nextRow: row,
+    neededCols: Math.max(neededCols, grid.length),
+    newlineMarkers,
+    newlineMarkerSet,
+    displayCount,
+    maxOutputCol,
+  };
 }
 
 // ===== Cursor Mapping =====
 function rawToCell(rawPos: number, units: Unit[], flow: FlowResult): GridCell {
   const { unitPos, nextCol, nextRow, newlineMarkers } = flow;
   if (units.length === 0) return { col: 0, row: usableStart(0) };
-  for (let ui = 0; ui < units.length; ui++) {
-    const u = units[ui];
-    if (rawPos >= u.rawStart && rawPos < u.rawStart + u.rawLen) {
-      if (u.type === 'newline') {
-        const nlCol = unitPos[ui].col;
-        for (let mi = 0; mi < newlineMarkers.length; mi++) {
-          if (newlineMarkers[mi].col === nlCol) return newlineMarkers[mi];
-        }
-        return { col: nlCol, row: usableStart(nlCol) };
+  const unitIndex = findUnitIndexAtRaw(rawPos, units);
+  if (unitIndex >= 0 && unitIndex < units.length) {
+    const u = units[unitIndex];
+    if (u.type === 'newline') {
+      const nlCol = unitPos[unitIndex].col;
+      for (let mi = 0; mi < newlineMarkers.length; mi++) {
+        if (newlineMarkers[mi].col === nlCol) return newlineMarkers[mi];
       }
-      return unitPos[ui];
+      return { col: nlCol, row: usableStart(nlCol) };
     }
+    return unitPos[unitIndex];
   }
   return { col: nextCol, row: nextRow };
 }
 
+function findUnitIndexAtRaw(rawPos: number, units: Unit[]): number {
+  let low = 0;
+  let high = units.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const unit = units[mid];
+    if (rawPos < unit.rawStart) {
+      high = mid - 1;
+    } else if (rawPos >= unit.rawStart + unit.rawLen) {
+      low = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+  return low;
+}
+
 // ===== Sync =====
-function syncFromRaw() {
-  const { units, flow } = getUnitsAndFlow();
-  const ac = rawToCell(activePos, units, flow);
+function syncFromRaw(units?: Unit[], flow?: FlowResult) {
+  const resolved = units && flow ? { units, flow } : getUnitsAndFlow();
+  const { units: resolvedUnits, flow: resolvedFlow } = resolved;
+  cursorSyncNeeded = false;
+  const ac = rawToCell(activePos, resolvedUnits, resolvedFlow);
   if (ac) gridCursor = { col: ac.col, row: ac.row };
+}
+
+function scheduleCursorSync() {
+  cursorSyncNeeded = true;
 }
 
 function updateSelection() {
@@ -1066,14 +1214,7 @@ function updateSelection() {
 
 // ===== Movement =====
 function moveUnit(delta: number, extend: boolean) {
-  const { units } = getUnitsAndFlow();
-  const text = textarea.value;
-  const stops: number[] = [];
-  const seen = new Set<number>();
-  for (let i = 0; i < units.length; i++) {
-    if (!seen.has(units[i].rawStart)) { stops.push(units[i].rawStart); seen.add(units[i].rawStart); }
-  }
-  if (!seen.has(text.length)) stops.push(text.length);
+  const stops = getRawStops();
   let curIdx = stops.length - 1;
   for (let i = 0; i < stops.length; i++) { if (stops[i] >= activePos) { curIdx = i; break; } }
   let newIdx = curIdx + delta;
@@ -1142,7 +1283,9 @@ function scheduleRender() {
 function render() {
   if (editorScreenEl.style.display === 'none') return;
   const { units, flow } = getUnitsAndFlow();
-  const { grid, neededCols, newlineMarkers } = flow;
+  const { grid, neededCols, newlineMarkerSet, displayCount } = flow;
+
+  if (cursorSyncNeeded) syncFromRaw(units, flow);
 
   if (neededCols !== totalCols) { totalCols = neededCols; buildGrid(); recalcSize(); }
 
@@ -1151,16 +1294,9 @@ function render() {
   const selMin = Math.min(anchorPos, activePos);
   const selMax = Math.max(anchorPos, activePos);
   const hasSelection = selMin !== selMax;
-
-  // Count display chars without filter()
-  let displayCount = 0;
-  for (let ui = 0; ui < units.length; ui++) if (units[ui].type !== 'newline') displayCount++;
-
-  // Build newline marker lookup
-  const nlSet = new Set<number>();
-  for (let i = 0; i < newlineMarkers.length; i++) {
-    nlSet.add(newlineMarkers[i].col * ROWS + newlineMarkers[i].row);
-  }
+  const visualCursor = (!hasSelection && isComposing && compEnd >= 0)
+    ? rawToCell(compEnd, units, flow)
+    : gridCursor;
 
   for (let c = 0; c < totalCols; c++) {
     const colStart = usableStart(c);
@@ -1189,11 +1325,11 @@ function render() {
       }
 
       // Newline marker
-      const isNl = nlSet.has(c * ROWS + r);
+      const isNl = newlineMarkerSet.has(c * ROWS + r);
       if (isNl) { newType = 'nl-mark'; newText = '↵'; }
 
       // Cursor
-      if (!isComposing && !hasSelection && c === gridCursor.col && r === gridCursor.row) flags |= FLAG_CURSOR;
+      if (!hasSelection && c === visualCursor.col && r === visualCursor.row) flags |= FLAG_CURSOR;
 
       // Diff check
       if (prev.text === newText && prev.type === newType && prev.flags === flags) continue;
@@ -1249,20 +1385,28 @@ function render() {
   }
 
   let s = displayCount + ' / ' + BASE_MAX + ' 文字';
-  const charInCol = gridCursor.row - usableStart(gridCursor.col) + 1;
-  s += '　第' + (gridCursor.col + 1) + '行 第' + charInCol + '字';
+  const charInCol = visualCursor.row - usableStart(visualCursor.col) + 1;
+  s += '　第' + (visualCursor.col + 1) + '行 第' + charInCol + '字';
   if (displayCount > BASE_MAX) s += '　<span class="overflow-warn">超過 +' + (displayCount - BASE_MAX) + '</span>';
   statusText.innerHTML = s;
+  if (!hasSelection) {
+    const prevCursor = gridCursor;
+    gridCursor = visualCursor;
+    keepCursorCellInView();
+    gridCursor = prevCursor;
+  }
 
   // IME変換中はtextarea位置を更新しない（compositionstartで固定済み）
   // 変換中に位置を動かすとIMEがリセットされ候補が消える
 
-  if (!isComposing && cells[gridCursor.col]?.[gridCursor.row]) {
-    const rect = cells[gridCursor.col][gridCursor.row].getBoundingClientRect();
-    textarea.style.left = rect.left + 'px';
-    textarea.style.top = rect.top + 'px';
-    textarea.style.width = rect.width + 'px';
-    textarea.style.height = rect.height + 'px';
+  if (!isComposing) {
+    const rect = getCellViewportRect(gridCursor.col, gridCursor.row);
+    if (rect) {
+      textarea.style.left = rect.left + 'px';
+      textarea.style.top = rect.top + 'px';
+      textarea.style.width = rect.width + 'px';
+      textarea.style.height = rect.height + 'px';
+    }
   }
 }
 
@@ -1285,7 +1429,10 @@ function onCellMouseDown(e: MouseEvent) {
     mouseAnchorCell = cr;
   }
   mouseIsDown = true;
-  updateSelection(); syncFromRaw(); textarea.focus(); render();
+  updateSelection();
+  scheduleCursorSync();
+  textarea.focus();
+  scheduleRender();
 }
 
 function resetCursor() {
@@ -1295,8 +1442,8 @@ function resetCursor() {
 }
 
 function positionCompositionInput() {
-  if (!cells[compCellCol]?.[compCellRow]) return;
-  const rect = cells[compCellCol][compCellRow].getBoundingClientRect();
+  const rect = getCellViewportRect(compCellCol, compCellRow);
+  if (!rect) return;
   const toolbarRect = document.getElementById('toolbar')?.getBoundingClientRect();
   const inputWidth = 220;
   const inputHeight = rect.height * 2;
@@ -1324,12 +1471,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   fileManagerEl = document.getElementById('file-manager')!;
   editorScreenEl = document.getElementById('editor-screen')!;
   fmListEl = document.getElementById('fm-list')!;
+  gridWrapperEl = document.getElementById('grid-wrapper')!;
   gridEl = document.getElementById('grid')!;
   textarea = document.getElementById('hidden-input') as HTMLTextAreaElement;
   statusText = document.getElementById('status-text')!;
   editorTitleEl = document.getElementById('editor-title')!;
   saveStatusEl = document.getElementById('save-status')!;
   fmFileInput = document.getElementById('fm-file-input') as HTMLInputElement;
+  viewZoomValueEl = document.getElementById('view-zoom-value')!;
   fontSizeValueEl = document.getElementById('font-size-value')!;
   fontWeightValueEl = document.getElementById('font-weight-value')!;
   gridSolidBtnEl = document.getElementById('btn-grid-solid') as HTMLButtonElement;
@@ -1367,6 +1516,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     togglePreview(title);
   });
   document.getElementById('btn-history')!.addEventListener('click', openHistory);
+  bindInlineControl('btn-zoom-smaller', () => stepViewZoom(-1));
+  bindInlineControl('btn-zoom-larger', () => stepViewZoom(1));
+  gridEl.addEventListener('mousedown', onCellMouseDown);
   bindInlineControl('btn-font-smaller', () => stepFontScale(-1));
   bindInlineControl('btn-font-larger', () => stepFontScale(1));
   bindInlineControl('btn-weight-lighter', () => stepFontWeight(-1));
@@ -1390,26 +1542,26 @@ window.addEventListener('DOMContentLoaded', async () => {
     dismissInputNotification();
     clearSavedStatusOnInput();
     invalidateCache();
+    anchorPos = activePos = textarea.selectionStart;
+    scheduleCursorSync();
     if (!isComposing) {
-      anchorPos = activePos = textarea.selectionStart;
-      syncFromRaw();
       markDirty();
       updateTitleDisplay();
       markPreviewDirty();
     }
-    render();
+    scheduleRender();
   });
   textarea.addEventListener('compositionend', () => {
     dismissInputNotification();
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
-    syncFromRaw();
+    scheduleCursorSync();
     markDirty();
     updateTitleDisplay();
     markPreviewDirty();
     flushPreview();
-    render();
+    scheduleRender();
   });
 
   // Keyboard
@@ -1485,7 +1637,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     } else {
       activePos = cellToNearestRaw(cr.col, cr.row);
     }
-    updateSelection(); syncFromRaw(); render();
+    updateSelection();
+    scheduleCursorSync();
+    scheduleRender();
   });
   document.addEventListener('mouseup', () => { mouseIsDown = false; mouseAnchorCell = null; });
   document.addEventListener('mousedown', (e) => {
@@ -1494,7 +1648,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   window.addEventListener('resize', () => {
-    if (editorScreenEl.style.display !== 'none') { recalcSize(); render(); }
+    if (editorScreenEl.style.display !== 'none') scheduleLayoutRefresh();
   });
 
   // Periodic preview flush (debounced, not per-keystroke)
@@ -1666,6 +1820,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     persistDisplaySettings();
     applySettings(appSettings);
+    recalcSize();
     updateInlineControlState();
     
     // Refresh the view
