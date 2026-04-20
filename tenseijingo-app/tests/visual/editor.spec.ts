@@ -222,6 +222,22 @@ async function expectCursorVisibleInsideGrid(page: Page, margin = 4) {
   expect((cursorBox?.y ?? 0) + (cursorBox?.height ?? 0)).toBeLessThanOrEqual((wrapperBox?.y ?? 0) + (wrapperBox?.height ?? 0) - margin);
 }
 
+async function measureGridLayout(page: Page) {
+  return page.evaluate(() => {
+    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
+    const grid = document.getElementById('grid') as HTMLElement;
+    const cell = grid.querySelector('.cell') as HTMLElement;
+    return {
+      wrapperWidth: wrapper.clientWidth,
+      wrapperHeight: wrapper.clientHeight,
+      gridWidth: grid.getBoundingClientRect().width,
+      gridHeight: grid.getBoundingClientRect().height,
+      cellWidth: cell.getBoundingClientRect().width,
+      cellHeight: cell.getBoundingClientRect().height,
+    };
+  });
+}
+
 test('captures first launch setup screen', async ({ page }) => {
   await bootstrap(page, { firstLaunch: true });
   await expect(page.locator('#setup-screen')).toBeVisible();
@@ -394,49 +410,52 @@ test('grows the grid on a larger viewport', async ({ page }) => {
   }).toBeGreaterThan((before?.width ?? 0) + 1);
 });
 
-test('uses more of the available width after enlarging the window on Windows', async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 720 });
+test('fits the full grid on the first Windows render even in a tighter viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 920, height: 560 });
   await bootstrap(page, { platformOverride: 'windows' });
   await openEditor(page);
 
-  const initialLayout = await page.evaluate(() => {
-    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
-    const grid = document.getElementById('grid') as HTMLElement;
-    const wrapperRect = wrapper.getBoundingClientRect();
-    const gridRect = grid.getBoundingClientRect();
-    const cell = grid.querySelector('.cell') as HTMLElement;
-    return {
-      leftGap: gridRect.left - wrapperRect.left,
-      cellWidth: cell.getBoundingClientRect().width,
-    };
-  });
-  expect(initialLayout.leftGap).toBeLessThanOrEqual(initialLayout.cellWidth * 1.5);
+  const layout = await measureGridLayout(page);
+  expect(layout.gridWidth).toBeLessThanOrEqual(layout.wrapperWidth + 1);
+  expect(layout.gridHeight).toBeLessThanOrEqual(layout.wrapperHeight + 1);
+  expect(layout.cellWidth).toBeLessThan(24);
+});
+
+test('shrinks the Windows grid when the viewport height gets smaller', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await bootstrap(page, { platformOverride: 'windows' });
+  await openEditor(page);
 
   const before = await page.locator('#grid .cell').first().boundingBox();
   expect(before).not.toBeNull();
 
-  await page.setViewportSize({ width: 1700, height: 720 });
+  await page.setViewportSize({ width: 1400, height: 620 });
 
   await expect.poll(async () => {
     const after = await page.locator('#grid .cell').first().boundingBox();
     return after?.width ?? 0;
-  }).toBeGreaterThan((before?.width ?? 0) + 6);
+  }).toBeLessThan((before?.width ?? 0) - 3);
 
-  const layout = await page.evaluate(() => {
-    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
-    const grid = document.getElementById('grid') as HTMLElement;
-    const wrapperRect = wrapper.getBoundingClientRect();
-    const gridRect = grid.getBoundingClientRect();
-    const cell = grid.querySelector('.cell') as HTMLElement;
-    return {
-      wrapperWidth: wrapper.clientWidth,
-      gridWidth: grid.getBoundingClientRect().width,
-      leftGap: gridRect.left - wrapperRect.left,
-      cellWidth: cell.getBoundingClientRect().width,
-    };
-  });
-  expect(layout.gridWidth).toBeGreaterThan(layout.wrapperWidth * 0.92);
-  expect(layout.leftGap).toBeLessThanOrEqual(layout.cellWidth * 1.5);
+  const layout = await measureGridLayout(page);
+  expect(layout.gridWidth).toBeLessThanOrEqual(layout.wrapperWidth + 1);
+  expect(layout.gridHeight).toBeLessThanOrEqual(layout.wrapperHeight + 1);
+});
+
+test('applies Windows display zoom steps without auto-fill cancelling them out', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await bootstrap(page, { platformOverride: 'windows' });
+  await openEditor(page);
+
+  const before = await page.locator('#grid .cell').first().boundingBox();
+  expect(before).not.toBeNull();
+
+  await page.locator('#btn-zoom-smaller').click();
+  await page.locator('#btn-zoom-smaller').click();
+
+  await expect.poll(async () => {
+    const after = await page.locator('#grid .cell').first().boundingBox();
+    return after?.width ?? 0;
+  }).toBeLessThan((before?.width ?? 0) - 4);
 });
 
 test('captures preview panel appearance', async ({ page }) => {
@@ -582,7 +601,7 @@ test('keeps the cursor visible during IME composition', async ({ page }) => {
   await expect(page.locator('.cell.cursor-cell')).toHaveAttribute('data-row', '5');
 });
 
-test('keeps the cursor visible while extending into overflow columns on Windows', async ({ page }) => {
+test('keeps the cursor visible while extending into later columns on Windows', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 720 });
   await bootstrap(page, {
     platformOverride: 'windows',
@@ -607,15 +626,6 @@ test('keeps the cursor visible while extending into overflow columns on Windows'
   }, 'あ'.repeat(140));
 
   await expect(page.locator('html')).toHaveAttribute('data-platform', 'windows');
-  const scrollMetrics = await page.locator('#grid-wrapper').evaluate((element) => {
-    const wrapper = element as HTMLElement;
-    return {
-      scrollWidth: wrapper.scrollWidth,
-      clientWidth: wrapper.clientWidth,
-      scrollLeft: wrapper.scrollLeft,
-    };
-  });
-  expect(scrollMetrics.scrollWidth).toBeGreaterThan(scrollMetrics.clientWidth);
   await expect.poll(async () => Number(await page.locator('.cell.cursor-cell').getAttribute('data-col'))).toBeGreaterThan(8);
   await expectCursorVisibleInsideGrid(page);
 });
@@ -747,6 +757,43 @@ test('keeps the Windows IME anchor stable when composition starts', async ({ pag
   expect(Math.abs((after?.y ?? 0) - (before?.y ?? 0))).toBeLessThanOrEqual(1);
   expect(Math.abs((after?.width ?? 0) - (before?.width ?? 0))).toBeLessThanOrEqual(1);
   expect(Math.abs((after?.height ?? 0) - (before?.height ?? 0))).toBeLessThanOrEqual(1);
+});
+
+test('moves the Windows IME anchor immediately when clicking a filled cell', async ({ page }) => {
+  await bootstrap(page, {
+    platformOverride: 'windows',
+    files: [{
+      id: 'file-1',
+      title: 'Windows IMEクリック確認',
+      body: 'あ'.repeat(140),
+      updated_at: '2026-04-16T10:00:00',
+      char_count: 140,
+      custom_title: true,
+    }],
+  });
+  await openEditor(page);
+
+  const result = await page.evaluate(() => {
+    const target = document.querySelector('.cell[data-col="7"][data-row="5"]') as HTMLElement;
+    const textarea = document.getElementById('hidden-input') as HTMLTextAreaElement;
+    const before = textarea.getBoundingClientRect();
+    const cell = target.getBoundingClientRect();
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    const after = textarea.getBoundingClientRect();
+    return {
+      before: { x: before.x, y: before.y, width: before.width, height: before.height },
+      after: { x: after.x, y: after.y, width: after.width, height: after.height },
+      cell: { x: cell.x, y: cell.y, width: cell.width, height: cell.height },
+      focused: document.activeElement === textarea,
+      ready: textarea.classList.contains('ime-anchor-ready'),
+    };
+  });
+
+  expect(result.focused).toBe(true);
+  expect(result.ready).toBe(true);
+  expect(Math.abs(result.after.x - result.before.x) + Math.abs(result.after.y - result.before.y)).toBeGreaterThan(2);
+  expect(result.after.x + result.after.width).toBeLessThanOrEqual(result.cell.x - 12);
+  expect(Math.abs(result.after.y - result.cell.y)).toBeLessThan(60);
 });
 
 test('switches save directory after confirmation and updates the label', async ({ page }) => {

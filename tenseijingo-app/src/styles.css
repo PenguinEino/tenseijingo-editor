@@ -446,6 +446,7 @@ body {
   font-size: 1px;
 }
 
+#hidden-input.ime-anchor-ready,
 #hidden-input.ime-anchor-active {
   opacity: 0.01;
   z-index: 2000;
@@ -457,6 +458,7 @@ body {
   direction: ltr;
 }
 
+:root[data-platform='windows'] #hidden-input.ime-anchor-ready,
 :root[data-platform='windows'] #hidden-input.ime-anchor-active {
   text-align: left;
 }

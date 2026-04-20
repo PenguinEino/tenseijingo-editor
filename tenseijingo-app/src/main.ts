@@ -170,8 +170,7 @@ document.documentElement.dataset.platform = runtimePlatform;
 const BASE_COLS = 35;
 const ROWS = 18;
 const BASE_CELL_SIZE = 34;
-const MAX_AUTO_CELL_SIZE = 56;
-const MIN_CELL_SIZE = 24;
+const MIN_CELL_SIZE = 12;
 const MAX_CELL_SIZE = 72;
 const BASE_GRID_CHROME = BASE_COLS + 1;
 
@@ -804,6 +803,7 @@ function showFileManager() {
   if (isEditingTitleInline) stopInlineTitleEdit();
   fileManagerEl.style.display = 'flex';
   editorScreenEl.style.display = 'none';
+  setImeAnchorReady(false);
   refreshFileList();
 }
 
@@ -923,7 +923,9 @@ function showEditor() {
   recalcSize();
   updateInlineControlState();
   render();
-  textarea.focus();
+  setImeAnchorReady(true);
+  syncHiddenInputPosition();
+  textarea.focus({ preventScroll: true });
   scheduleLayoutRefresh();
 }
 
@@ -1117,29 +1119,17 @@ function getAutoCellSize() {
 
   const fitByWidth = Math.floor((width - BASE_GRID_CHROME) / BASE_COLS);
   const fitByHeight = Math.floor((height - 1) / ROWS);
-  // Prioritize the manuscript width and let vertical overflow scroll when needed.
-  const fitted = fitByWidth > 0 ? fitByWidth : fitByHeight;
+  // Keep the whole manuscript visible even on tighter Windows/WebView layouts.
+  const fitted = Math.min(fitByWidth, fitByHeight);
   if (!Number.isFinite(fitted) || fitted <= 0) return BASE_CELL_SIZE;
 
-  return Math.max(BASE_CELL_SIZE, Math.min(MAX_AUTO_CELL_SIZE, fitted));
-}
-
-function getBaseGridPixelWidth(cellSize: number) {
-  return BASE_COLS * cellSize + BASE_GRID_CHROME;
+  return Math.max(1, Math.min(MAX_CELL_SIZE, fitted));
 }
 
 function recalcSize() {
-  const { width } = getContentBoxSize(gridWrapperEl);
   const autoCellSize = getAutoCellSize();
-  let cellSize = Math.min(MAX_CELL_SIZE, Math.max(MIN_CELL_SIZE, Math.round(autoCellSize * appSettings.viewZoom)));
-  if (width > 0) {
-    const blankWidth = width - getBaseGridPixelWidth(cellSize);
-    const targetBlank = Math.max(18, Math.round(cellSize * 1.2));
-    if (blankWidth > targetBlank) {
-      const extraCells = Math.ceil((blankWidth - targetBlank) / BASE_COLS);
-      cellSize = Math.min(MAX_CELL_SIZE, cellSize + extraCells);
-    }
-  }
+  const minCellSize = Math.min(MIN_CELL_SIZE, autoCellSize);
+  const cellSize = Math.min(MAX_CELL_SIZE, Math.max(minCellSize, Math.round(autoCellSize * appSettings.viewZoom)));
   const fontSize = Math.max(7, Math.round(cellSize * appSettings.fontScale));
   const boostedTcy = Math.round(fontSize * appSettings.tcyScale);
   const maxTcy = Math.floor(cellSize * 0.9);
@@ -1181,6 +1171,17 @@ function applyTextareaRect(rect: { left: number; top: number; width: number; hei
   textarea.style.top = `${Math.round(rect.top)}px`;
   textarea.style.width = `${Math.max(1, Math.round(rect.width))}px`;
   textarea.style.height = `${Math.max(1, Math.round(rect.height))}px`;
+}
+
+function setImeAnchorReady(active: boolean) {
+  if (!isWindows) return;
+  textarea.classList.toggle('ime-anchor-ready', active);
+}
+
+function syncHiddenInputPosition() {
+  if (cursorSyncNeeded) syncFromRaw();
+  if (isComposing) positionCompositionInput();
+  else positionHiddenInput();
 }
 
 function getWindowsImeDockRect(referenceRect: ReturnType<typeof getCellViewportRect>) {
@@ -1595,7 +1596,11 @@ function cellFromEvent(e: MouseEvent): GridCell | null {
 
 function onCellMouseDown(e: MouseEvent) {
   const cr = cellFromEvent(e);
-  if (!cr) { textarea.focus(); return; }
+  if (!cr) {
+    setImeAnchorReady(true);
+    textarea.focus({ preventScroll: true });
+    return;
+  }
   e.preventDefault();
   activePos = cellToNearestRaw(cr.col, cr.row);
   if (!e.shiftKey) {
@@ -1604,8 +1609,10 @@ function onCellMouseDown(e: MouseEvent) {
   }
   mouseIsDown = true;
   updateSelection();
-  scheduleCursorSync();
-  textarea.focus();
+  syncFromRaw();
+  setImeAnchorReady(true);
+  positionHiddenInput();
+  textarea.focus({ preventScroll: true });
   scheduleRender();
 }
 
@@ -1731,9 +1738,17 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateInlineControlState();
 
   // IME composition
+  textarea.addEventListener('focus', () => {
+    setImeAnchorReady(true);
+    if (!isComposing) syncHiddenInputPosition();
+  });
+  textarea.addEventListener('blur', () => {
+    if (!isComposing) setImeAnchorReady(false);
+  });
   textarea.addEventListener('compositionstart', () => {
     dismissInputNotification();
     isComposing = true;
+    setImeAnchorReady(true);
     setCompositionAnchorActive(true);
     clearSavedStatusOnInput();
     if (cursorSyncNeeded) syncFromRaw();
@@ -1760,6 +1775,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     dismissInputNotification();
     isComposing = false; compStart = -1; compSuffixLen = 0; compCellCol = -1; compCellRow = -1;
     setCompositionAnchorActive(false);
+    setImeAnchorReady(document.activeElement === textarea);
     invalidateCache();
     anchorPos = activePos = textarea.selectionStart;
     scheduleCursorSync();
@@ -1850,10 +1866,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('mouseup', () => { mouseIsDown = false; mouseAnchorCell = null; });
   document.addEventListener('mousedown', (e) => {
     if (editorScreenEl.style.display !== 'none' && !(e.target as HTMLElement).closest('#toolbar') && (e.target as HTMLElement).tagName !== 'INPUT' && !(e.target as HTMLElement).closest('#preview-panel'))
-      setTimeout(() => textarea.focus(), 0);
+      setTimeout(() => textarea.focus({ preventScroll: true }), 0);
   });
 
   window.addEventListener('resize', () => {
+    if (editorScreenEl.style.display !== 'none') scheduleLayoutRefresh();
+  });
+  window.visualViewport?.addEventListener('resize', () => {
     if (editorScreenEl.style.display !== 'none') scheduleLayoutRefresh();
   });
   if ('ResizeObserver' in window) {
@@ -1862,6 +1881,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
     observer.observe(gridWrapperEl);
   }
+  gridWrapperEl.addEventListener('scroll', () => {
+    if (editorScreenEl.style.display === 'none' || isComposing) return;
+    syncHiddenInputPosition();
+  }, { passive: true });
 
   // Periodic preview flush (debounced, not per-keystroke)
   setInterval(() => { if (previewDirty) flushPreview(); }, 300);
