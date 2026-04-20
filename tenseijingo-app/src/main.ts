@@ -252,6 +252,10 @@ let compCellRow = -1;
 let autoSaveTimer: number | null = null;
 let mouseIsDown = false;
 let mouseAnchorCell: GridCell | null = null;
+let mouseClientX = 0;
+let mouseClientY = 0;
+let selectionAutoScrollRAF = 0;
+let preserveViewportWhileRendering = false;
 let gridCursor: GridCell = { col: 0, row: 5 };
 let anchorPos = 0;
 let activePos = 0;
@@ -363,11 +367,31 @@ function persistDisplaySettings() {
   localStorage.setItem('user_settings', JSON.stringify(appSettings));
 }
 
+function preserveGridViewport(run: () => void) {
+  if (!gridWrapperEl || editorScreenEl?.style.display === 'none') {
+    run();
+    return;
+  }
+
+  const { scrollLeft, scrollTop } = gridWrapperEl;
+  preserveViewportWhileRendering = true;
+  try {
+    run();
+  } finally {
+    preserveViewportWhileRendering = false;
+  }
+
+  gridWrapperEl.scrollTo({ left: scrollLeft, top: scrollTop, behavior: 'auto' });
+  if (!isComposing) syncHiddenInputPosition();
+}
+
 function applyDisplaySettings() {
-  applySettings(appSettings);
-  recalcSize();
-  updateInlineControlState();
-  render();
+  preserveGridViewport(() => {
+    applySettings(appSettings);
+    recalcSize();
+    updateInlineControlState();
+    render();
+  });
 }
 
 function stepViewZoom(delta: number) {
@@ -1166,6 +1190,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getAxisDistance(start: number, end: number, point: number) {
+  if (point < start) return start - point;
+  if (point > end) return point - end;
+  return 0;
+}
+
 function applyTextareaRect(rect: { left: number; top: number; width: number; height: number }) {
   textarea.style.left = `${Math.round(rect.left)}px`;
   textarea.style.top = `${Math.round(rect.top)}px`;
@@ -1182,6 +1212,153 @@ function syncHiddenInputPosition() {
   if (cursorSyncNeeded) syncFromRaw();
   if (isComposing) positionCompositionInput();
   else positionHiddenInput();
+}
+
+function setMousePointer(clientX: number, clientY: number) {
+  mouseClientX = clientX;
+  mouseClientY = clientY;
+}
+
+function getCellFromElement(el: HTMLElement | null): GridCell | null {
+  if (!el) return null;
+  const cell = el.closest('.cell') as HTMLElement | null;
+  if (!cell) return null;
+  const col = parseInt(cell.dataset.col ?? '', 10);
+  const row = parseInt(cell.dataset.row ?? '', 10);
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+  if (row < usableStart(col) || row >= usableEnd(col)) return null;
+  return { col, row };
+}
+
+function getCellFromClientPoint(clientX: number, clientY: number): GridCell | null {
+  const wrapperRect = gridWrapperEl.getBoundingClientRect();
+  if (wrapperRect.width <= 0 || wrapperRect.height <= 0) return null;
+
+  const x = clamp(clientX, wrapperRect.left + 1, wrapperRect.right - 1);
+  const y = clamp(clientY, wrapperRect.top + 1, wrapperRect.bottom - 1);
+  const pointed = getCellFromElement(document.elementFromPoint(x, y) as HTMLElement | null);
+  if (pointed) return pointed;
+
+  let bestCol = -1;
+  let bestColDistance = Number.POSITIVE_INFINITY;
+  for (let c = 0; c < totalCols; c++) {
+    const sampleRow = usableStart(c);
+    const sampleCell = cells[c]?.[sampleRow];
+    if (!sampleCell) continue;
+    const rect = sampleCell.getBoundingClientRect();
+    const distance = getAxisDistance(rect.left, rect.right, x);
+    if (distance < bestColDistance) {
+      bestColDistance = distance;
+      bestCol = c;
+      if (distance === 0) break;
+    }
+  }
+  if (bestCol < 0) return null;
+
+  let bestRow = usableStart(bestCol);
+  let bestRowDistance = Number.POSITIVE_INFINITY;
+  for (let r = usableStart(bestCol); r < usableEnd(bestCol); r++) {
+    const rect = cells[bestCol]?.[r]?.getBoundingClientRect();
+    if (!rect) continue;
+    const distance = getAxisDistance(rect.top, rect.bottom, y);
+    if (distance < bestRowDistance) {
+      bestRowDistance = distance;
+      bestRow = r;
+      if (distance === 0) break;
+    }
+  }
+  return { col: bestCol, row: bestRow };
+}
+
+function updateMouseSelectionToCell(cr: GridCell) {
+  if (mouseAnchorCell) {
+    const isSame = cr.col === mouseAnchorCell.col && cr.row === mouseAnchorCell.row;
+    if (isSame) {
+      activePos = cellToNearestRaw(cr.col, cr.row);
+      anchorPos = activePos;
+    } else {
+      const anchorStart = cellToNearestRaw(mouseAnchorCell.col, mouseAnchorCell.row);
+      const anchorEnd = cellRawEnd(mouseAnchorCell.col, mouseAnchorCell.row);
+      const activeStart = cellToNearestRaw(cr.col, cr.row);
+      const activeEnd = cellRawEnd(cr.col, cr.row);
+      if (activeStart < anchorStart) {
+        anchorPos = anchorEnd;
+        activePos = activeStart;
+      } else {
+        anchorPos = anchorStart;
+        activePos = activeEnd;
+      }
+    }
+  } else {
+    activePos = cellToNearestRaw(cr.col, cr.row);
+  }
+  updateSelection();
+  scheduleCursorSync();
+  scheduleRender();
+}
+
+function stopSelectionAutoScroll() {
+  if (!selectionAutoScrollRAF) return;
+  cancelAnimationFrame(selectionAutoScrollRAF);
+  selectionAutoScrollRAF = 0;
+}
+
+function stepSelectionAutoScroll() {
+  if (!mouseIsDown) {
+    selectionAutoScrollRAF = 0;
+    return;
+  }
+
+  const wrapperRect = gridWrapperEl.getBoundingClientRect();
+  const edge = Math.max(28, Math.round(currentCellSize * 1.15));
+  const maxStep = Math.max(18, Math.round(currentCellSize * 0.85));
+  let deltaX = 0;
+  let deltaY = 0;
+
+  if (mouseClientX < wrapperRect.left + edge) {
+    deltaX = Math.min(maxStep, Math.ceil((wrapperRect.left + edge - mouseClientX) * 0.35));
+  } else if (mouseClientX > wrapperRect.right - edge) {
+    deltaX = -Math.min(maxStep, Math.ceil((mouseClientX - (wrapperRect.right - edge)) * 0.35));
+  }
+
+  if (mouseClientY < wrapperRect.top + edge) {
+    deltaY = -Math.min(maxStep, Math.ceil((wrapperRect.top + edge - mouseClientY) * 0.35));
+  } else if (mouseClientY > wrapperRect.bottom - edge) {
+    deltaY = Math.min(maxStep, Math.ceil((mouseClientY - (wrapperRect.bottom - edge)) * 0.35));
+  }
+
+  if (deltaX !== 0 || deltaY !== 0) {
+    const beforeLeft = gridWrapperEl.scrollLeft;
+    const beforeTop = gridWrapperEl.scrollTop;
+    gridWrapperEl.scrollBy({ left: deltaX, top: deltaY, behavior: 'auto' });
+    if (gridWrapperEl.scrollLeft !== beforeLeft || gridWrapperEl.scrollTop !== beforeTop) {
+      const cr = getCellFromClientPoint(mouseClientX, mouseClientY);
+      if (cr) updateMouseSelectionToCell(cr);
+    }
+  }
+
+  selectionAutoScrollRAF = requestAnimationFrame(stepSelectionAutoScroll);
+}
+
+function startSelectionAutoScroll() {
+  if (selectionAutoScrollRAF) return;
+  selectionAutoScrollRAF = requestAnimationFrame(stepSelectionAutoScroll);
+}
+
+function isLikelyMouseWheelInput(event: WheelEvent) {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  if (Math.abs(event.deltaY) < 0.5 || Math.abs(event.deltaX) > 0.5) return false;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE || event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return true;
+
+  const legacyEvent = event as WheelEvent & { wheelDeltaY?: number; wheelDeltaX?: number };
+  const legacyDeltaY = typeof legacyEvent.wheelDeltaY === 'number' ? Math.abs(legacyEvent.wheelDeltaY) : 0;
+  const legacyDeltaX = typeof legacyEvent.wheelDeltaX === 'number' ? Math.abs(legacyEvent.wheelDeltaX) : 0;
+  if (legacyDeltaY > 0 && legacyDeltaX < 1 && legacyDeltaY % 120 === 0) return true;
+
+  const absY = Math.abs(event.deltaY);
+  if (absY < 40) return false;
+  const rounded = Math.round(absY);
+  return Math.abs(absY - rounded) < 0.01 && (rounded % 100 === 0 || rounded % 120 === 0);
 }
 
 function getWindowsImeDockRect(referenceRect: ReturnType<typeof getCellViewportRect>) {
@@ -1570,7 +1747,7 @@ function render() {
   s += '　第' + (visualCursor.col + 1) + '行 第' + charInCol + '字';
   if (displayCount > BASE_MAX) s += '　<span class="overflow-warn">超過 +' + (displayCount - BASE_MAX) + '</span>';
   statusText.innerHTML = s;
-  if (!hasSelection) {
+  if (!hasSelection && !preserveViewportWhileRendering) {
     const prevCursor = gridCursor;
     gridCursor = visualCursor;
     keepCursorCellInView();
@@ -1587,11 +1764,7 @@ function render() {
 
 // ===== Event Handlers =====
 function cellFromEvent(e: MouseEvent): GridCell | null {
-  const el = (e.target as HTMLElement).closest('.cell') as HTMLElement | null;
-  if (!el) return null;
-  const col = parseInt(el.dataset.col!), row = parseInt(el.dataset.row!);
-  if (row < usableStart(col) || row >= usableEnd(col)) return null;
-  return { col, row };
+  return getCellFromElement(e.target as HTMLElement | null);
 }
 
 function onCellMouseDown(e: MouseEvent) {
@@ -1608,6 +1781,8 @@ function onCellMouseDown(e: MouseEvent) {
     mouseAnchorCell = cr;
   }
   mouseIsDown = true;
+  setMousePointer(e.clientX, e.clientY);
+  startSelectionAutoScroll();
   updateSelection();
   syncFromRaw();
   setImeAnchorReady(true);
@@ -1837,33 +2012,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Mouse
   document.addEventListener('mousemove', (e) => {
     if (!mouseIsDown) return;
-    const cr = cellFromEvent(e); if (!cr) return;
-    if (mouseAnchorCell) {
-      const isSame = cr.col === mouseAnchorCell.col && cr.row === mouseAnchorCell.row;
-      if (isSame) {
-        activePos = cellToNearestRaw(cr.col, cr.row);
-        anchorPos = activePos;
-      } else {
-        const anchorStart = cellToNearestRaw(mouseAnchorCell.col, mouseAnchorCell.row);
-        const anchorEnd = cellRawEnd(mouseAnchorCell.col, mouseAnchorCell.row);
-        const activeStart = cellToNearestRaw(cr.col, cr.row);
-        const activeEnd = cellRawEnd(cr.col, cr.row);
-        if (activeStart < anchorStart) {
-          anchorPos = anchorEnd;
-          activePos = activeStart;
-        } else {
-          anchorPos = anchorStart;
-          activePos = activeEnd;
-        }
-      }
-    } else {
-      activePos = cellToNearestRaw(cr.col, cr.row);
-    }
-    updateSelection();
-    scheduleCursorSync();
-    scheduleRender();
+    setMousePointer(e.clientX, e.clientY);
+    const cr = getCellFromClientPoint(e.clientX, e.clientY);
+    if (!cr) return;
+    updateMouseSelectionToCell(cr);
   });
-  document.addEventListener('mouseup', () => { mouseIsDown = false; mouseAnchorCell = null; });
+  document.addEventListener('mouseup', () => {
+    mouseIsDown = false;
+    mouseAnchorCell = null;
+    stopSelectionAutoScroll();
+  });
   document.addEventListener('mousedown', (e) => {
     if (editorScreenEl.style.display !== 'none' && !(e.target as HTMLElement).closest('#toolbar') && (e.target as HTMLElement).tagName !== 'INPUT' && !(e.target as HTMLElement).closest('#preview-panel'))
       setTimeout(() => textarea.focus({ preventScroll: true }), 0);
@@ -1885,6 +2043,19 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (editorScreenEl.style.display === 'none' || isComposing) return;
     syncHiddenInputPosition();
   }, { passive: true });
+  gridWrapperEl.addEventListener('wheel', (e) => {
+    if (editorScreenEl.style.display === 'none' || !isLikelyMouseWheelInput(e)) return;
+
+    const targetAxis = e.shiftKey ? 'top' : 'left';
+    const before = targetAxis === 'left' ? gridWrapperEl.scrollLeft : gridWrapperEl.scrollTop;
+    gridWrapperEl.scrollBy({
+      left: e.shiftKey ? 0 : e.deltaY,
+      top: e.shiftKey ? e.deltaY : 0,
+      behavior: 'auto',
+    });
+    const after = targetAxis === 'left' ? gridWrapperEl.scrollLeft : gridWrapperEl.scrollTop;
+    if (after !== before) e.preventDefault();
+  }, { passive: false });
 
   // Periodic preview flush (debounced, not per-keystroke)
   setInterval(() => { if (previewDirty) flushPreview(); }, 300);

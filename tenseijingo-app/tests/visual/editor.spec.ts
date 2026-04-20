@@ -207,6 +207,12 @@ async function openEditor(page: Page) {
   await expect(page.locator('#grid .cell')).toHaveCount(35 * 18);
 }
 
+async function openEditorWithOverflow(page: Page) {
+  await page.locator('.fm-item-info').click();
+  await expect(page.locator('#editor-screen')).toBeVisible();
+  await expect.poll(async () => page.locator('#grid .cell').count()).toBeGreaterThan(35 * 18);
+}
+
 async function moveCursorToEnd(page: Page) {
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End');
 }
@@ -236,6 +242,17 @@ async function measureGridLayout(page: Page) {
       cellHeight: cell.getBoundingClientRect().height,
     };
   });
+}
+
+function createFilledFile(body: string, title = '長文原稿'): MockFile {
+  return {
+    id: 'file-1',
+    title,
+    body,
+    updated_at: '2026-04-16T10:00:00',
+    char_count: [...body].filter((char) => char !== '\n').length,
+    custom_title: true,
+  };
 }
 
 test('captures first launch setup screen', async ({ page }) => {
@@ -458,6 +475,86 @@ test('applies Windows display zoom steps without auto-fill cancelling them out',
   }).toBeLessThan((before?.width ?? 0) - 4);
 });
 
+test('preserves horizontal scroll position when changing display zoom', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await bootstrap(page, {
+    files: [createFilledFile('あ'.repeat(900), '倍率スクロール保持確認')],
+  });
+  await openEditorWithOverflow(page);
+
+  const before = await page.locator('#grid-wrapper').evaluate((element) => {
+    const wrapper = element as HTMLElement;
+    wrapper.scrollLeft = Math.min(320, wrapper.scrollWidth - wrapper.clientWidth);
+    return {
+      scrollLeft: wrapper.scrollLeft,
+      maxScrollLeft: wrapper.scrollWidth - wrapper.clientWidth,
+    };
+  });
+  expect(before.maxScrollLeft).toBeGreaterThan(0);
+  expect(before.scrollLeft).toBeGreaterThan(0);
+
+  await page.locator('#btn-zoom-larger').click();
+
+  const after = await page.locator('#grid-wrapper').evaluate((element) => {
+    const wrapper = element as HTMLElement;
+    return wrapper.scrollLeft;
+  });
+  expect(after).toBeGreaterThan(0);
+  expect(Math.abs(after - before.scrollLeft)).toBeLessThanOrEqual(40);
+});
+
+test('swaps mouse-wheel scrolling axes without remapping trackpad-like scroll deltas', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await bootstrap(page, {
+    files: [createFilledFile('あ'.repeat(900), 'ホイール確認')],
+  });
+  await openEditorWithOverflow(page);
+
+  const metrics = await page.locator('#grid-wrapper').evaluate((element) => {
+    const wrapper = element as HTMLElement;
+    const stage = document.getElementById('grid-stage') as HTMLElement;
+    stage.style.minHeight = `${wrapper.clientHeight * 2}px`;
+
+    wrapper.scrollLeft = 0;
+    wrapper.scrollTop = 0;
+    wrapper.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: 120,
+      bubbles: true,
+      cancelable: true,
+    }));
+    const mouseWheel = { left: wrapper.scrollLeft, top: wrapper.scrollTop };
+
+    wrapper.scrollLeft = 0;
+    wrapper.scrollTop = 0;
+    wrapper.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: 120,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    }));
+    const shiftMouseWheel = { left: wrapper.scrollLeft, top: wrapper.scrollTop };
+
+    wrapper.scrollLeft = 0;
+    wrapper.scrollTop = 0;
+    wrapper.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: 18,
+      bubbles: true,
+      cancelable: true,
+    }));
+    const trackpadLike = { left: wrapper.scrollLeft, top: wrapper.scrollTop };
+
+    stage.style.minHeight = '';
+    return { mouseWheel, shiftMouseWheel, trackpadLike };
+  });
+
+  expect(metrics.mouseWheel.left).toBeGreaterThan(0);
+  expect(metrics.mouseWheel.top).toBe(0);
+  expect(metrics.shiftMouseWheel.left).toBe(0);
+  expect(metrics.shiftMouseWheel.top).toBeGreaterThan(0);
+  expect(metrics.trackpadLike.left).toBe(0);
+  expect(metrics.trackpadLike.top).toBe(0);
+});
+
 test('captures preview panel appearance', async ({ page }) => {
   await bootstrap(page);
   await openEditor(page);
@@ -628,6 +725,43 @@ test('keeps the cursor visible while extending into later columns on Windows', a
   await expect(page.locator('html')).toHaveAttribute('data-platform', 'windows');
   await expect.poll(async () => Number(await page.locator('.cell.cursor-cell').getAttribute('data-col'))).toBeGreaterThan(8);
   await expectCursorVisibleInsideGrid(page);
+});
+
+test('auto-scrolls while drag-selecting toward the grid edge', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await bootstrap(page, {
+    files: [createFilledFile('あ'.repeat(900), 'ドラッグ選択確認')],
+  });
+  await openEditorWithOverflow(page);
+
+  const startCell = await page.locator('.cell[data-col="0"][data-row="5"]').boundingBox();
+  const wrapper = await page.locator('#grid-wrapper').boundingBox();
+  expect(startCell).not.toBeNull();
+  expect(wrapper).not.toBeNull();
+
+  const y = (startCell?.y ?? 0) + ((startCell?.height ?? 0) / 2);
+  await page.mouse.move((startCell?.x ?? 0) + ((startCell?.width ?? 0) / 2), y);
+  await page.mouse.down();
+  await page.mouse.move((wrapper?.x ?? 0) + 4, y, { steps: 12 });
+
+  await expect.poll(async () => page.locator('#grid-wrapper').evaluate((element) => {
+    const wrapper = element as HTMLElement;
+    return wrapper.scrollLeft;
+  })).toBeGreaterThan(0);
+
+  const selectionState = await page.locator('#hidden-input').evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
+    return {
+      selectionLength: textarea.selectionEnd - textarea.selectionStart,
+      scrollLeft: wrapper.scrollLeft,
+    };
+  });
+  await page.mouse.up();
+
+  expect(selectionState.scrollLeft).toBeGreaterThan(0);
+  expect(selectionState.selectionLength).toBeGreaterThan(600);
+  await expect.poll(async () => page.locator('.cell.selected').count()).toBeGreaterThan(30);
 });
 
 test('keeps the IME anchor near the active cell on upper rows', async ({ page }) => {
