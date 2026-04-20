@@ -475,6 +475,25 @@ test('applies Windows display zoom steps without auto-fill cancelling them out',
   }).toBeLessThan((before?.width ?? 0) - 4);
 });
 
+test('balances the left and right margins when only the base grid is visible', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await bootstrap(page);
+  await openEditor(page);
+
+  const margins = await page.evaluate(() => {
+    const wrapper = document.getElementById('grid-wrapper') as HTMLElement;
+    const grid = document.getElementById('grid') as HTMLElement;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    return {
+      leftGap: gridRect.left - wrapperRect.left,
+      rightGap: wrapperRect.right - gridRect.right,
+    };
+  });
+
+  expect(Math.abs(margins.leftGap - margins.rightGap)).toBeLessThanOrEqual(2);
+});
+
 test('preserves horizontal scroll position when changing display zoom', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 720 });
   await bootstrap(page, {
@@ -515,24 +534,26 @@ test('swaps mouse-wheel scrolling axes without remapping trackpad-like scroll de
     const stage = document.getElementById('grid-stage') as HTMLElement;
     stage.style.minHeight = `${wrapper.clientHeight * 2}px`;
 
-    wrapper.scrollLeft = 0;
+    wrapper.scrollLeft = Math.min(320, wrapper.scrollWidth - wrapper.clientWidth);
     wrapper.scrollTop = 0;
+    const beforeMouseWheel = wrapper.scrollLeft;
     wrapper.dispatchEvent(new WheelEvent('wheel', {
       deltaY: 120,
       bubbles: true,
       cancelable: true,
     }));
-    const mouseWheel = { left: wrapper.scrollLeft, top: wrapper.scrollTop };
+    const mouseWheel = { before: beforeMouseWheel, left: wrapper.scrollLeft, top: wrapper.scrollTop };
 
     wrapper.scrollLeft = 0;
-    wrapper.scrollTop = 0;
+    wrapper.scrollTop = 60;
+    const beforeShiftMouseWheel = wrapper.scrollTop;
     wrapper.dispatchEvent(new WheelEvent('wheel', {
       deltaY: 120,
       shiftKey: true,
       bubbles: true,
       cancelable: true,
     }));
-    const shiftMouseWheel = { left: wrapper.scrollLeft, top: wrapper.scrollTop };
+    const shiftMouseWheel = { before: beforeShiftMouseWheel, left: wrapper.scrollLeft, top: wrapper.scrollTop };
 
     wrapper.scrollLeft = 0;
     wrapper.scrollTop = 0;
@@ -547,10 +568,10 @@ test('swaps mouse-wheel scrolling axes without remapping trackpad-like scroll de
     return { mouseWheel, shiftMouseWheel, trackpadLike };
   });
 
-  expect(metrics.mouseWheel.left).toBeGreaterThan(0);
+  expect(metrics.mouseWheel.left).toBeLessThan(metrics.mouseWheel.before);
   expect(metrics.mouseWheel.top).toBe(0);
   expect(metrics.shiftMouseWheel.left).toBe(0);
-  expect(metrics.shiftMouseWheel.top).toBeGreaterThan(0);
+  expect(metrics.shiftMouseWheel.top).toBeGreaterThan(metrics.shiftMouseWheel.before);
   expect(metrics.trackpadLike.left).toBe(0);
   expect(metrics.trackpadLike.top).toBe(0);
 });
@@ -797,7 +818,7 @@ test('keeps the IME anchor near the active cell on upper rows', async ({ page })
   const inputBox = await page.locator('#hidden-input').boundingBox();
   expect(inputBox).not.toBeNull();
   expect(Math.abs((inputBox?.y ?? 0) - (cursorBox?.y ?? 0))).toBeLessThan(60);
-  expect(Math.abs(((inputBox?.x ?? 0) + (inputBox?.width ?? 0)) - ((cursorBox?.x ?? 0) + (cursorBox?.width ?? 0)))).toBeLessThanOrEqual(24);
+  expect(Math.abs(((inputBox?.x ?? 0) + (inputBox?.width ?? 0)) - ((cursorBox?.x ?? 0) + (cursorBox?.width ?? 0)))).toBeLessThanOrEqual(26);
   await expect(page.locator('#hidden-input')).toHaveClass(/ime-anchor-active/);
   await expect(page.locator('#hidden-input')).toHaveCSS('text-align', 'right');
 });

@@ -314,7 +314,7 @@ body {
 #grid-stage {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   min-width: 100%;
   min-height: 100%;
   width: max-content;

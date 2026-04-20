@@ -2046,15 +2046,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   gridWrapperEl.addEventListener('wheel', (e) => {
     if (editorScreenEl.style.display === 'none' || !isLikelyMouseWheelInput(e)) return;
 
-    const targetAxis = e.shiftKey ? 'top' : 'left';
-    const before = targetAxis === 'left' ? gridWrapperEl.scrollLeft : gridWrapperEl.scrollTop;
+    e.preventDefault();
     gridWrapperEl.scrollBy({
-      left: e.shiftKey ? 0 : e.deltaY,
+      left: e.shiftKey ? 0 : -e.deltaY,
       top: e.shiftKey ? e.deltaY : 0,
       behavior: 'auto',
     });
-    const after = targetAxis === 'left' ? gridWrapperEl.scrollLeft : gridWrapperEl.scrollTop;
-    if (after !== before) e.preventDefault();
   }, { passive: false });
 
   // Periodic preview flush (debounced, not per-keystroke)
